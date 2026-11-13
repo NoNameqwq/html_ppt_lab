@@ -48,18 +48,13 @@ async function exportHtml() {
   }
   try {
     const fileName = safeFileName(project.name, project.id) + '.html';
-    if (isRawMode()) {
-      // 兼容模式：走 server 导出（原稿 + 内联补丁应用器），动效完整
-      const res = await fetch('/api/projects/' + encodeURIComponent(project.id) + '/export');
-      if (!res.ok) throw new Error('导出失败（HTTP ' + res.status + '）');
-      downloadBlob(await res.blob(), fileName);
-      toast.ok('已导出 ' + fileName);
-      return { ok: true, fileName, raw: true };
-    }
-    const html = await serializeDeck();
-    downloadBlob(new Blob([html], { type: 'text/html;charset=utf-8' }), fileName);
+    const saved=await ctx?.getEditor?.()?.saveNow({reason:'export'});
+    if(saved?.ok===false)throw new Error(saved.error||'保存失败');
+    const res = await fetch('/api/projects/' + encodeURIComponent(project.id) + '/export');
+    if (!res.ok) throw new Error('导出失败（HTTP ' + res.status + '）');
+    downloadBlob(await res.blob(), fileName);
     toast.ok('已导出 ' + fileName);
-    return { ok: true, fileName };
+    return { ok: true, fileName, raw: isRawMode() };
   } catch (err) {
     console.error('[export] 导出失败', err);
     toast.error('导出失败：' + (err?.message || err));

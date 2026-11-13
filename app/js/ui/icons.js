@@ -1,6 +1,9 @@
 /* 内联 SVG 图标集（24×24，描边风格，currentColor） */
 
 const P = {
+  shield: '<path d="M12 3 4.5 6v5.5c0 4.2 3 7.5 7.5 9.5 4.5-2 7.5-5.3 7.5-9.5V6z"/><path d="M12 8v5M12 16v.1"/>',
+  paperclip: '<path d="m8 12 6.4-6.4a3.5 3.5 0 0 1 5 5L10.6 19a5 5 0 0 1-7-7l9-9"/><path d="m7 14 7.5-7.5a1.4 1.4 0 0 1 2 2L9 16"/>',
+  'more-horizontal': '<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>',
   logo: '<rect x="3" y="3" width="18" height="18" rx="1" fill="currentColor" stroke="none"/><path d="M7 8h10M7 12h6M7 16h8" stroke="var(--bg,#fff)" stroke-width="2.2" stroke-linecap="square"/>',
   /* Agent 标识：坚实方形终端，不使用机器人/星星 */
   agent: '<rect x="3" y="3" width="18" height="18" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7.2 8.4 10.8 12l-3.6 3.6M13 15.6h4.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/>',

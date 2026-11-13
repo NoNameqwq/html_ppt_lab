@@ -4,6 +4,7 @@
 
 import { h } from '../core/dom.js';
 import { icon } from '../ui/icons.js';
+import { openRedoDialog } from './redo-dialog.js';
 
 let ctx = null;
 let menuEl = null;
@@ -139,11 +140,7 @@ async function openForElement(hit, clientX, clientY) {
   }));
   menu.append(mkItem({
     icon: 'agent', label: '用 AI 重做这个元素',
-    run: () => {
-      const page = deck.total ? `第 ${slideIndex + 1}/${deck.total} 页` : '';
-      const text = `【右键选中${typeLabel}，工程「${proj.name || '当前工程'}」${page ? '，' + page : ''}】先读取这个元素（id: ${elementId}），按更符合当前视觉风格的方式重新设计它（保持可编辑）。`;
-      ctx.bus.runCommand('agent.send', { text });
-    },
+    run: () => openRedoDialog(ctx, { projectId: proj.id, projectName: proj.name, index: slideIndex, slideId: deck.slides?.[slideIndex]?.id, elementId, typeLabel }),
   }));
 
   menu.append(h('div', { class: 'ctx-menu-sep' }));
@@ -301,10 +298,7 @@ function openForCanvas(clientX, clientY) {
   menu.append(mkItem({ icon: 'chevron-right', label: '下一页', run: () => goBy(1) }));
   menu.append(mkItem({
     icon: 'agent', label: '让 AI 重做这一页',
-    run: () => {
-      const text = `【工程「${proj.name || '当前工程'}」第 ${(deck.current || 0) + 1}/${deck.total || 1} 页】先读取这一页，再按当前视觉风格重做版式与动效（保持可编辑）。`;
-      ctx.bus.runCommand('agent.send', { text });
-    },
+    run: () => openRedoDialog(ctx, { projectId: proj.id, projectName: proj.name, index: deck.current || 0, slideId: deck.slides?.[deck.current || 0]?.id }),
   }));
   place(menu, clientX, clientY);
 }

@@ -7,6 +7,7 @@ import { h, isTypingTarget } from '../core/dom.js';
 import { toast } from '../core/toast.js';
 import { dialog } from '../core/dialog.js';
 import { icon } from '../ui/icons.js';
+import { initRichAuthoring } from './rich-authoring.js';
 
 let ctx = null;
 let dropBound = false;
@@ -25,6 +26,7 @@ export async function init(context) {
   bindPaste();
   bindEvents();
   registerCommands();
+  initRichAuthoring(ctx);
 }
 
 function getBridge() {

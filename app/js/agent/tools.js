@@ -2,6 +2,10 @@
 
 import { clamp, escapeHtml, sleep } from '../core/dom.js';
 import { ART_DIRECTIONS, getDirection, directionThemeVars } from './blueprints.js';
+import { API_CATALOG, apiURL } from './api-catalog.js';
+import { renderFormula, sanitizeSvg, formulaMarkup, preparePageRichContent } from '../core/rich-content.js';
+import { buildNavigationHTML, resolveChapters } from '../core/deck-navigation.js';
+import { availableFonts, recommendFonts } from '../core/fonts.js';
 
 /* 文本截断（core/dom.js 未提供） */
 function truncate(str, max = 120) {
@@ -12,6 +16,16 @@ function truncate(str, max = 120) {
 /* ---------- 工具元信息（UI 卡片显示用） ---------- */
 
 export const TOOL_META = {
+  deck_set_navigation: { label: '设计章节目录', kind: 'write', icon: 'list' },
+  deck_generate_image: { label: '生成并插入配图', kind: 'write', icon: 'image' },
+  deck_insert_math: { label: '排版 LaTeX 公式', kind: 'write', icon: 'code' },
+  deck_insert_svg: { label: '绘制 SVG 图解', kind: 'write', icon: 'shapes' },
+  deck_auto_fonts: { label: '自动选择字体', kind: 'write', icon: 'type' },
+  fonts_list: { label: '查看可用字体', kind: 'read', icon: 'type' },
+  app_list_apis: { label: '发现网页接口', kind: 'read', icon: 'list' },
+  app_call_api: { label: '调用网页接口', kind: 'read', icon: 'terminal' },
+  tool_result_read: { label: '读取完整工具结果', kind: 'read', icon: 'file-text' },
+  file_patch: { label: '局部修改文件', kind: 'file', icon: 'code' },
   deck_get_state: { label: '读取工程状态', kind: 'read', icon: 'cpu' },
   deck_read_slide: { label: '读取幻灯片', kind: 'read', icon: 'layout' },
   deck_get_element: { label: '读取元素', kind: 'read', icon: 'search' },
@@ -58,6 +72,21 @@ export function getToolMeta(name) {
   return TOOL_META[name] || { label: name, kind: 'write', icon: 'wrench' };
 }
 
+// Resolve nested dispatchers too: a generic API tool can be a project write.
+export function mutationProject(ctx, name, args = {}) {
+  const current = ctx.store.get().project?.id || null;
+  if (name === 'app_call_api') {
+    const op = API_CATALOG.find((o) => o.id === args.operation);
+    return op && op.method !== 'GET' && op.permission !== 'read' && op.path.includes('{projectId}')
+      && op.id !== 'versions.create' ? args.projectId || current : null;
+  }
+  if (name === 'app_run_command') {
+    if (commandAccess(String(args.name || '')) === 'blocked') return null;
+    if (/^(app\.(save|reloadDeck|settings)|file\.(export|download)|view\.|present\.|zoom\.|agent\.)/.test(args.name || '')) return null;
+  }
+  return TOOL_META[name] && TOOL_META[name].kind !== 'read' ? current : null;
+}
+
 /* ---------- 工作权限（Codex 风格 approval mode） ---------- */
 
 export const PERMISSION_LEVELS = [
@@ -70,6 +99,7 @@ const PERMISSION_RANK = { read: 0, edit: 1, full: 2 };
 
 /** 需要「完全访问」的工具（改代码 / 写文件 / 自定义转场 / 整页重写 / 全局效果） */
 const FULL_ONLY_TOOLS = new Set([
+  'file_patch',
   'file_write',
   'deck_set_deck_js',
   'deck_set_deck_css',
@@ -108,6 +138,7 @@ export function getToolDefinitionsForPermission(permission, options = {}) {
   return TOOL_DEFINITIONS.filter((d) => {
     const name = d.function && d.function.name;
     if (name === 'web_search' && !options.webSearch) return false;
+    if (name === 'deck_generate_image' && !options.imageGeneration) return false;
     return canUseTool(permission, name);
   });
 }
@@ -129,6 +160,12 @@ const XYWH = {
   y: { type: 'number', description: '左上角 y（画布坐标 1080 高），默认 160。' },
   w: { type: 'number', description: '宽度 px。' },
   h: { type: 'number', description: '高度 px。' },
+};
+
+const NAV_SCHEMA = {
+  type: 'object', description: '可跳转的动画目录。目录占 slides 中的一页，不额外增加页数。章节 slideIndex 为最终数组中的 0 起始索引。',
+  properties: { style: { type: 'string', enum: ['petals', 'orbit', 'steps'] }, title: { type: 'string' }, subtitle: { type: 'string' },
+    chapters: { type: 'array', minItems: 2, maxItems: 6, items: { type: 'object', properties: { title: { type: 'string' }, slideIndex: { type: 'integer' }, description: { type: 'string' }, color: { type: 'string' } }, required: ['title', 'slideIndex'], additionalProperties: false } } }, required: ['chapters'], additionalProperties: false,
 };
 
 const ANIM_PARAMS = {
@@ -160,6 +197,22 @@ function fn(name, description, properties, required = []) {
 }
 
 export const TOOL_DEFINITIONS = [
+  fn('deck_set_navigation', '把指定目录页替换成花瓣展开 / 知识轨道 / 章节阶梯，章节点击可进入目标页，放映时选中图形放大过渡。仅替换指定页，不增加页数。', { index: INDEX_PARAM, ...NAV_SCHEMA.properties }, ['chapters']),
+  fn('deck_generate_image', '使用用户手动开启并配置的生图服务生成一张图片，保存为工程本地素材并自动插入指定页面。关闭时不可调用；不要通过设置自行开启。', { prompt: { type: 'string', description: '详细画面与构图要求，风格需匹配演示；文字与公式保留在可编辑元素中。' }, index: INDEX_PARAM, alt: { type: 'string' }, ...XYWH }, ['prompt']),
+  fn('deck_insert_math', '用 LaTeX 排版公式，保留源码。elementId 指定时更新已有公式，否则插入当前页。公式必须使用此工具或 KaTeX，不要用普通文字模拟。', {latex:{type:'string'},elementId:ELEMENT_ID,fontSize:{type:'number'},...XYWH}, ['latex']),
+  fn('deck_insert_svg', '插入或更新安全的完整 SVG 矢量图解，适用于知识讲解、流程、几何和必要绘画。保留源码以便编辑。', {svg:{type:'string'},elementId:ELEMENT_ID,...XYWH}, ['svg']),
+  fn('fonts_list', '检测本机可用字体，并按内容推荐标题/正文组合。', {text:{type:'string'},profile:{type:'string',enum:['auto','academic','business','editorial','technical','playful']}}),
+  fn('deck_auto_fonts', '按工程文字和风格自动选择本机字体，应用到各页文本。保留公式数学字体与 SVG 内部字形。', {profile:{type:'string',enum:['auto','academic','business','editorial','technical','playful']}}),
+  fn('app_list_apis', '发现网页全部业务 API（工程、导入、文件、素材、时间线、设置、搜索、导出等），返回操作 ID、方法、参数和所需权限。', { filter: { type: 'string' } }),
+  fn('app_call_api', '按操作 ID 调用 app_list_apis 中的业务接口。projectId 默认当前工程；query 是 URL 参数，body 是请求体。严格遵守操作要求的权限。导出/预览返回可点击链接。', {
+    operation: { type: 'string' }, projectId: { type: 'string' }, query: { type: 'object', additionalProperties: true }, body: { type: 'object', additionalProperties: true },
+  }, ['operation']),
+  fn('tool_result_read', '分页读取完整工具结果；工具结果较大时根据 resultId 和 nextOffset 继续读取，内容不会被丢弃。', {
+    resultId: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 100, maximum: 60000 },
+  }, ['resultId']),
+  fn('file_patch', '精确替换工程文件中的一段文字。search 必须唯一匹配，失败不会写文件。优先用此工具小步修改，避免重写整个文件。', {
+    path: { type: 'string' }, search: { type: 'string' }, replacement: { type: 'string' },
+  }, ['path', 'search', 'replacement']),
   /* ---------- 读取 ---------- */
   fn('deck_get_state', '读取当前工程状态：工程名/页数/当前页/幻灯片列表/当前选中元素/编辑器能力/历史条数。任何编辑前先调用。'),
   fn('deck_read_slide', '读取某一页的 HTML 结构与自定义 CSS，用于了解页面元素与 id。返回内容可能较长，按需读取。', {
@@ -175,6 +228,8 @@ export const TOOL_DEFINITIONS = [
   }),
   fn('file_read', '读取工程内文本文件（仅 index.html、assets/**、original/**）。', {
     path: { type: 'string', description: '相对工程根目录的路径，如 index.html、original/index.html。' },
+    offset: { type: 'integer', description: '从第几个字符开始读取，默认 0。' },
+    limit: { type: 'integer', description: '每次最多读取字符数，默认 30000，最大 120000；使用 nextOffset 继续。' },
   }, ['path']),
   fn('file_list', '列出当前工程包含的文件与大小。'),
   fn('project_info', '读取工程元信息（名称、来源、主题、页数、更新时间、文件列表、历史条数）。'),
@@ -272,6 +327,7 @@ export const TOOL_DEFINITIONS = [
         type: 'object',
         properties: {
           name: { type: 'string', description: '页名，如「封面」。' },
+          navigation: NAV_SCHEMA,
           transition: { type: 'string', description: '切换：fade pushLeft zoom iris blinds wipeUp curtain dissolve glitch shutter mosaic bars 等。' },
           duration: { type: 'integer', description: '切换时长 ms，默认 800。' },
           bg: { type: 'string', description: '页面底色（CSS 颜色或渐变）。' },
@@ -283,7 +339,9 @@ export const TOOL_DEFINITIONS = [
             items: {
               type: 'object',
               properties: {
-                type: { type: 'string', enum: ['text', 'shape', 'image', 'html'], description: '元素类型。' },
+                type: { type: 'string', enum: ['text', 'shape', 'image', 'html', 'math', 'svg'], description: '元素类型；math/svg 直接渲染在制作页面中。' },
+                latex: { type: 'string', description: 'math 类型的 LaTeX 源码，不含分隔符。' },
+                svg: { type: 'string', description: 'svg 类型的完整 SVG 源码。' },
                 x: { type: 'number' }, y: { type: 'number' }, w: { type: 'number' }, h: { type: 'number' },
                 text: { type: 'string', description: 'text 类型：纯文本。' },
                 html: { type: 'string', description: 'text/html 类型：富文本或任意 HTML。' },
@@ -447,6 +505,7 @@ function getBridge(ctx) {
 
 /** 调用 bridge，把 reject / {ok:false} 转成抛错，由统一 catch 转 {ok:false,error} */
 async function bridgeCall(ctx, method, params) {
+  if (typeof params?.html === 'string' && ['insertElement','setText','setSlideHtml','addSlide'].includes(method)) params = { ...params, html: preparePageRichContent(params.html) };
   const bridge = getBridge(ctx);
   if (!bridge) {
     const err = new Error('编辑器尚未就绪，请等画布加载完成后再试。');
@@ -501,6 +560,7 @@ const CAPABILITY_TOOL_MAP = {
   deck_set_animation: ['animations'],
   deck_set_custom_transition: ['animations', 'transitions'],
   deck_add_slide: ['structure'],
+  deck_set_navigation: ['structure', 'transitions'],
   deck_duplicate_slide: ['structure'],
   deck_delete_slide: ['structure'],
   deck_move_slide: ['structure'],
@@ -815,8 +875,8 @@ async function execReadSlide(ctx, params) {
     ok: true,
     index,
     slide: slide ? { id: slide.id, name: slide.name, transition: slide.transition } : null,
-    html: truncate(html, 26000),
-    css: truncate(pageCss || deckCss, 14000),
+    html: String(html || ''),
+    css: String(pageCss || deckCss || ''),
     note: 'html 为页面 canvas 结构；修改元素请用 deck_* 工具并确保传入 elementId。',
   };
 }
@@ -852,7 +912,7 @@ async function execGetElement(ctx, params) {
     element = { ...parsed, type: parsed.className.includes('wpx-image') ? 'image' : parsed.className.includes('wpx-shape') ? 'shape' : 'text' };
   }
   const out = { ok: true, element };
-  if (params.includeHtml) out.html = truncate(typeof html === 'string' ? html : '', 12000);
+  if (params.includeHtml) out.html = typeof html === 'string' ? html : '';
   return out;
 }
 
@@ -863,7 +923,7 @@ async function execGetHtml(ctx, params) {
   const text = String(html);
   return {
     ok: true,
-    html: truncate(text, max),
+    html: text.slice(0, max),
     length: text.length,
     truncated: text.length > max,
   };
@@ -878,14 +938,16 @@ async function execFileRead(ctx, params) {
   try {
     const file = await ctx.api.getFile(project.id, path);
     const content = String(file && file.content != null ? file.content : '');
-    const max = 60000;
+    const offset = Math.max(0, Math.floor(Number(params.offset) || 0));
+    const max = Math.min(120000, Math.max(100, Math.floor(Number(params.limit) || 30000)));
+    const end = Math.min(content.length, offset + max);
     return {
       ok: true,
       path,
       size: file && file.size != null ? file.size : content.length,
       mtime: file && file.mtime,
-      truncated: content.length > max,
-      content: truncate(content, max),
+      offset, totalChars: content.length, nextOffset: end < content.length ? end : null,
+      content: content.slice(offset, end),
     };
   } catch (err) {
     return FAIL('读取失败：' + (err && err.message ? err.message : String(err)));
@@ -1153,6 +1215,36 @@ async function execInsertHtml(ctx, params) {
   return { ok: true, elementId: res && res.elementId, opId, summary: '已插入自定义 HTML 块' };
 }
 
+async function execRich(ctx, params, type) {
+  const math = type === 'math', source = String(math ? params.latex || '' : params.svg || '');
+  const size = clamp(Number(params.fontSize) || 52, 12, 200);
+  const html = math
+    ? `<link rel="stylesheet" href="/app/vendor/katex/katex.min.css" data-wds-math><div data-wds-latex="${escapeHtml(source)}" style="font-size:${size}px;display:flex;align-items:center;justify-content:center;width:100%;height:100%;overflow:auto">${renderFormula(source,true)}</div>`
+    : `<div data-wds-svg="${escapeHtml(source)}" style="width:100%;height:100%">${sanitizeSvg(source)}</div>`;
+  if (params.elementId) {
+    const result = await bridgeCall(ctx, 'setText', {elementId:params.elementId,html});
+    return {ok:true,elementId:params.elementId,opId:commitOp(ctx,result,math?'更新公式':'更新图解'),summary:math?'已更新 LaTeX 公式':'已更新 SVG 图解'};
+  }
+  const result = await bridgeCall(ctx,'insertElement',{type:'html',html,x:clamp(Number(params.x) || 160,-1920,3840),y:clamp(Number(params.y) || 160,-1080,2160),w:clamp(Number(params.w) || 1200,20,3840),h:clamp(Number(params.h) || (math?220:600),20,2160)});
+  return {ok:true,elementId:result.elementId,opId:commitOp(ctx,result,math?'插入公式':'插入图解'),summary:math?'已插入 LaTeX 公式':'已插入 SVG 图解'};
+}
+async function execAutoFonts(ctx,params) {
+  const serialized=await bridgeCall(ctx,'serialize',{}), html=typeof serialized==='string'?serialized:serialized.html;
+  const doc=new DOMParser().parseFromString(html,'text/html');
+  const recommendation=recommendFonts({profile:params.profile||'auto',text:doc.body.textContent||'',fonts:availableFonts()});
+  const opIds=[];
+  for(const el of doc.querySelectorAll('[data-wpx-el]')) {
+    if(el.closest('svg,.katex,[data-wds-latex],[data-wds-svg]')||el.querySelector('svg,.katex,[data-wds-latex]')||!el.textContent.trim())continue;
+    const heading=/^H[1-3]$/i.test(el.tagName)||el.classList.contains('wpx-title')||parseFloat(el.style.fontSize)>=64;
+    const family=el.matches('pre,code')?recommendation.mono:heading?recommendation.heading:recommendation.body;
+    const result=await bridgeCall(ctx,'setStyles',{elementId:el.dataset.wpxEl,styles:{'font-family':recommendation.stack(family)}});
+    const id=commitOp(ctx,result,'自动选择字体');if(id)opIds.push(id);
+    const nested=[...el.querySelectorAll('[style]')].filter((node)=>node.style.fontFamily&&!node.closest('svg,.katex'));
+    if(nested.length){for(const node of nested)node.style.fontFamily=recommendation.stack(family);const updated=await bridgeCall(ctx,'setText',{elementId:el.dataset.wpxEl,html:el.innerHTML});const innerId=commitOp(ctx,updated,'自动选择字体');if(innerId)opIds.push(innerId);}
+  }
+  return {ok:true,opIds,opId:opIds.at(-1),fonts:{heading:recommendation.heading,body:recommendation.body,mono:recommendation.mono},summary:recommendation.reason};
+}
+
 async function execDeleteElement(ctx, params) {
   const id = resolveElementId(ctx, params);
   if (!id) return FAIL('请先选中要删除的元素，或传入 elementId。');
@@ -1233,7 +1325,8 @@ function animAttrsOf(anim) {
 
 function elementHtmlOf(item, seed, index) {
   const e = item && typeof item === 'object' ? item : {};
-  const type = ['text', 'shape', 'image', 'html'].includes(e.type) ? e.type : 'text';
+  const richType = ['math', 'svg'].includes(e.type) ? e.type : null;
+  const type = richType ? 'html' : ['text', 'shape', 'image', 'html'].includes(e.type) ? e.type : 'text';
   const x = Number(e.x) || 0;
   const y = Number(e.y) || 0;
   const w = Number(e.w) || (type === 'shape' ? 400 : 600);
@@ -1268,6 +1361,7 @@ function elementHtmlOf(item, seed, index) {
     if (!style.color) style.color = 'var(--wpx-fg)';
   }
 
+  if (richType === 'math' && !style.fontSize) style.fontSize = '52px';
   const id = e.id ? escapeAttr(e.id) : `c${seed}${index}`;
   const cls = `wpx-el wpx-${type}`;
   const common = `class="${cls}" data-wpx-el="${id}" data-wpx-type="${type === 'html' ? 'html' : type}" style="${escapeAttr(cssTextOf(style))}"`;
@@ -1279,11 +1373,13 @@ function elementHtmlOf(item, seed, index) {
   if (type === 'shape') {
     return `<div ${common}${animAttrsOf(e.anim)}></div>`;
   }
-  const inner = e.html != null && String(e.html).trim() ? String(e.html) : escapeHtml(e.text || '');
+  const inner = richType === 'math' ? formulaMarkup(e.latex, true)
+    : richType === 'svg' ? `<div data-wds-svg="${escapeAttr(e.svg)}" style="width:100%;height:100%">${sanitizeSvg(e.svg)}</div>`
+    : e.html != null && String(e.html).trim() ? String(e.html) : escapeHtml(e.text || '');
   return `<div ${common}${animAttrsOf(e.anim)}>${inner}</div>`;
 }
 
-function sectionHtmlOf(slide, index, dir) {
+function sectionHtmlOf(slide, index, dir, ids) {
   const s = slide && typeof slide === 'object' ? slide : {};
   const name = String(s.name || `第 ${index + 1} 页`);
   const transition = String(s.transition || (index === 0 ? 'fade' : 'wipeUp'));
@@ -1297,7 +1393,7 @@ function sectionHtmlOf(slide, index, dir) {
     const list = Array.isArray(s.elements) ? s.elements : [];
     inner = list.map((el, i) => elementHtmlOf(el, `${index}_`, i)).filter(Boolean).join('\n');
   }
-  return `<section class="wpx-slide" data-id="sc${Date.now().toString(36)}${index}" data-name="${escapeAttr(name)}" data-transition="${escapeAttr(transition)}"${duration ? ` data-transition-duration="${duration}"` : ''} data-bg="${escapeAttr(bg)}"${fx}><div class="wpx-canvas">${inner}</div></section>`;
+  return `<section class="wpx-slide" data-id="${ids[index]}" data-name="${escapeAttr(name)}" data-transition="${escapeAttr(transition)}"${duration ? ` data-transition-duration="${duration}"` : ''} data-bg="${escapeAttr(bg)}"${fx}><div class="wpx-canvas">${inner}</div></section>`;
 }
 
 async function execCompose(ctx, params) {
@@ -1308,6 +1404,13 @@ async function execCompose(ctx, params) {
   if (raw) return FAIL('这是导入的网页原稿，页结构由它自己的 HTML/JS 决定，不能整套重建。要生成新演示，请先在文件库「新建」一个空白工程；或在当前工程里只改现有页内容。');
 
   const dir = getDirection(params.direction);
+  const seed = Date.now().toString(36), ids = slides.map((_, i) => `sc${seed}_${i}`);
+  // Validate and render all math/navigation before making the first mutation.
+  const prepared = slides.map((slide, i) => {
+    const spec = slide.navigation ? { ...slide, html: buildNavigationHTML({ ...slide.navigation,
+      chapters: resolveChapters(slide.navigation.chapters || [], slides.map((s,j) => ({ ...s, id: ids[j] })), i) }, ids[i] + '-nav') } : slide;
+    return preparePageRichContent(sectionHtmlOf(spec, i, dir, ids));
+  });
   const vars = { ...(dir ? directionThemeVars(dir.id) : {}), ...(params.vars && typeof params.vars === 'object' ? params.vars : {}) };
   const cleanVars = {};
   for (const [k, v] of Object.entries(vars)) {
@@ -1331,7 +1434,7 @@ async function execCompose(ctx, params) {
   const original = state ? (state.slides || []).length : (ctx.store.get().deck.total || 1);
   const opIds = [];
   for (let i = 0; i < slides.length; i += 1) {
-    const html = sectionHtmlOf(slides[i], i, dir);
+    const html = prepared[i];
     if (i === 0) {
       const res = await bridgeCall(ctx, 'setSlideHtml', { index: 0, html });
       const opId = commitOp(ctx, res, '生成页面');
@@ -1356,6 +1459,37 @@ async function execCompose(ctx, params) {
     opIds,
     summary: `已生成 ${slides.length} 页整套演示${dir ? '（' + dir.name + '）' : ''}`,
   };
+}
+
+async function execNavigation(ctx, params) {
+  const state = await safeState(ctx);
+  if (!state?.slides?.length) return FAIL('请先打开一个原生演示工程');
+  const index = params.index ?? state.current;
+  if (!Number.isInteger(index) || !state.slides[index]) return FAIL('目录页索引无效');
+  const chapters = resolveChapters(params.chapters || [], state.slides, index);
+  const html = buildNavigationHTML({ ...params, chapters }, 'nav-' + state.slides[index].id);
+  const result = await bridgeCall(ctx, 'setSlideHtml', { index, html });
+  return { ok: true, index, chapters: chapters.length, opId: commitOp(ctx, result, '设计章节目录'), summary: `已设计 ${chapters.length} 章动画目录，可点击进入章节` };
+}
+
+async function execGenerateImage(ctx, params, opts = {}) {
+  const projectId = getProject(ctx)?.id;
+  if (!projectId) return FAIL('请先打开一个工程');
+  const settings = await ctx.api.getSettings();
+  if (!settings.imageGeneration?.enabled) return FAIL('生图未开启，请由用户在「生图设置」中手动开启');
+  const state = await safeState(ctx), index = params.index ?? state?.current ?? 0;
+  if (!state?.slides?.[index]) return FAIL('图片目标页面不存在');
+  const targetId = state.slides[index].id;
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generate-image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: params.prompt }), signal: opts.signal });
+  const data = await response.json();
+  if (!response.ok) return FAIL(data.error?.message || '生图失败');
+  opts.signal?.throwIfAborted();
+  if (getProject(ctx)?.id !== projectId) return FAIL('工程已切换；生成图片已保存到原工程素材，未插入其他工程');
+  const latest = await safeState(ctx), targetIndex = latest.slides.findIndex((s) => s.id === targetId);
+  if (targetIndex < 0) return FAIL('目标页面已删除；生成图片保留在工程素材中');
+  await bridgeCall(ctx, 'go', { index: targetIndex });
+  const inserted = await execInsertImage(ctx, { ...params, src: data.url });
+  return { ...inserted, url: data.url, model: data.model, summary: inserted.ok ? '已生成配图并插入页面，本地素材可随工程导出' : inserted.summary };
 }
 
 async function execAddSlide(ctx, params) {
@@ -1650,6 +1784,12 @@ async function execSetElementAction(ctx, params) {
   return { ok: true, opId, elementId: id, action, summary: action === 'none' ? '已清除点击交互' : '已设置点击交互：' + action };
 }
 
+function commandAccess(name) {
+  if (/^(agent\.|app\.(toggleAgent|back))/.test(name)) return 'blocked';
+  if (/^(file\.|project\.|templates\.|app\.(settings|reloadDeck)|insert\.html|element\.editHtml|design\.(css|js))/.test(name)) return 'full';
+  return 'edit';
+}
+
 async function execAppListCommands(ctx, params) {
   const all = ctx.bus.listCommands ? ctx.bus.listCommands() : [];
   const kw = String((params && params.filter) || '').trim().toLowerCase();
@@ -1657,20 +1797,20 @@ async function execAppListCommands(ctx, params) {
   const rows = all
     .filter((c) => !kw || (c.name + ' ' + (c.label || '') + ' ' + (c.group || '')).toLowerCase().includes(kw))
     .slice(0, limit)
-    .map((c) => ({ name: c.name, label: c.label || c.name, group: c.group || '', payload: c.payload || '' }));
+    .map((c) => ({ name: c.name, label: c.label || c.name, group: c.group || '', payload: c.payload || c.parameters || {}, permission: commandAccess(c.name), note: commandAccess(c.name) === 'blocked' ? '会话控制请由用户操作；业务功能请用 app_call_api。' : '' }));
   return { ok: true, total: all.length, shown: rows.length, commands: rows, summary: `共 ${all.length} 个命令，返回 ${rows.length} 个` };
 }
 
-async function execAppRunCommand(ctx, params) {
+async function execAppRunCommand(ctx, params, opts = {}) {
   const name = String((params && params.name) || '').trim();
   if (!name) return FAIL('需要命令名 name。先用 app_list_commands 查看。');
   if (!ctx.bus.hasCommand(name)) {
     const list = ctx.bus.listCommands().map((c) => c.name).filter((n) => n.includes(name.split('.')[0]));
     return FAIL('未注册命令：' + name + (list.length ? '；相近命令：' + list.slice(0, 8).join(', ') : ''));
   }
-  if (/^(agent\.|file\.|project\.(delete|rename|duplicate|export)|app\.(export|print|present|reloadDeck))/.test(name)) {
-    return FAIL('这个命令不能由 Agent 直接触发：' + name + '。改用对应工具，或让用户在界面上操作。');
-  }
+  const access = commandAccess(name);
+  if (access === 'blocked') return FAIL('会话控制不能递归调用；业务功能请使用 app_call_api。');
+  if (permissionRank(opts.permission) < permissionRank(access)) return FAIL('命令需要「' + permissionLabel(access) + '」权限。');
   const res = await ctx.bus.runCommand(name, (params && params.payload) || {});
   const ok = !(res && res.ok === false);
   return { ok, name, result: res, summary: ok ? '已执行命令 ' + name : '命令失败：' + (res && res.error || '未知错误') };
@@ -1800,7 +1940,93 @@ async function execFileWrite(ctx, params) {
 
 /* ---------- 执行器注册表 ---------- */
 
+async function execListApis(ctx, params) {
+  const filter = String(params.filter || '').toLowerCase();
+  return { ok: true, operations: API_CATALOG.filter((op) => !filter || (op.id + op.description).toLowerCase().includes(filter)) };
+}
+async function execCallApi(ctx, params, opts) {
+  const op = API_CATALOG.find((o) => o.id === params.operation);
+  if (!op) return FAIL('未知接口，请先用 app_list_apis 查找 operation。');
+  if (permissionRank(opts.permission) < permissionRank(op.permission)) return FAIL('接口需要「' + permissionLabel(op.permission) + '」权限。');
+  if (op.id === 'search.web' && !opts.webSearch) return FAIL('请先开启联网。');
+  const current = ctx.store.get().project?.id;
+  const projectId = params.projectId || current;
+  const body = params.body || {};
+  if (op.id === 'settings.write' && Object.hasOwn(body, 'imageGeneration')) return FAIL('生图只能由用户在「生图设置」中手动开启或修改。');
+  if (op.id === 'files.write' && projectId === current) return execFileWrite(ctx, body);
+  if (op.id === 'files.write' || op.id === 'files.read') {
+    const filePath = normalizePath(body.path || params.query?.path || 'index.html');
+    if (!pathAllowed(filePath, op.id === 'files.write' ? WRITE_PATHS : READ_PATHS)) return FAIL('文件路径不在可访问的工程文件范围内。');
+  }
+  const url = apiURL(op, projectId, params.query);
+  if (['export.html','preview.thumbnail','templates.export','versions.preview','versions.present','versions.export'].includes(op.id)) {
+    if (projectId === current) await ctx.getEditor?.()?.saveNow?.({ reason: 'agent-export' });
+    return { ok: true, url, summary: op.id.endsWith('export')||op.id==='export.html' ? '导出链接已生成' : op.id.endsWith('present')?'放映链接已生成':'预览链接已生成' };
+  }
+  const mutatesCurrent = op.method !== 'GET' && projectId && projectId === current;
+  if (mutatesCurrent) {
+    const saved = await ctx.getEditor?.()?.saveNow?.({ reason: 'agent-api' });
+    if (saved?.ok === false) return FAIL('当前工程保存失败，请先保存后重试。');
+  }
+  const request = async () => {
+    const res = await fetch(url, { method: op.method, signal: opts.signal,
+      headers: op.method === 'GET' ? {} : { 'Content-Type': 'application/json' },
+      ...(op.method === 'GET' ? {} : { body: JSON.stringify(body) }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `接口返回 ${res.status}`);
+    return data;
+  };
+  const editor = ctx.getEditor?.();
+  const data = op.id === 'versions.restore' && projectId === current && editor?.restoreVersion ? await editor.restoreVersion(request) : await request();
+  if (op.id === 'projects.delete' && projectId === current) ctx.agentDeletedProjectId = projectId;
+  if (op.id === 'settings.write') ctx.store.update((s) => { s.settings = { ...s.settings, ...data, loaded: true }; });
+  if (op.id === 'projects.update' && projectId === current && data.project) {
+    ctx.store.update((s) => { s.project = data.project; }); ctx.bus.emit('project:renamed', data.project);
+  }
+  if (op.id === 'versions.restore' && projectId === current && data.project) ctx.store.update((s) => { s.project = data.project; });
+  if (op.id === 'history.write' && projectId === current) {
+    ctx.store.setHistory?.(Array.isArray(body.ops) ? body.ops : []);
+    ctx.bus.emit('history:change', ctx.store.get().history);
+  }
+  if (mutatesCurrent && /^(patches|config|timeline)\.write$|^projects\.upgrade$/.test(op.id)) await ctx.bus.runCommand('app.reloadDeck');
+  ctx.bus.emit('library:refresh');
+  return { ok: true, operation: op.id, ...data,
+    ...(data.project?.id ? { url: '#/p/' + encodeURIComponent(data.project.id) } : {}),
+  };
+}
+async function execResultRead(ctx, params) {
+  const content = ctx.agentToolResults?.get(params.resultId);
+  if (content == null) return FAIL('找不到结果 ID，可重新调用原读取工具。');
+  const offset = Math.max(0, Math.floor(Number(params.offset) || 0));
+  const limit = Math.min(60000, Math.max(100, Math.floor(Number(params.limit) || 12000)));
+  const end = Math.min(content.length, offset + limit);
+  return { ok: true, resultId: params.resultId, offset, totalChars: content.length, nextOffset: end < content.length ? end : null, content: content.slice(offset, end) };
+}
+async function execFilePatch(ctx, params) {
+  const project = getProject(ctx), path = normalizePath(params.path);
+  if (!project || !pathAllowed(path, WRITE_PATHS)) return FAIL('需要有效的工程内文件路径。');
+  if (typeof params.search !== 'string' || !params.search || typeof params.replacement !== 'string') return FAIL('需要非空 search 和字符串 replacement。');
+  const saved = await getEditor(ctx)?.saveNow?.({ reason: 'agent-patch' });
+  if (saved?.ok === false) return FAIL('保存当前工程失败。');
+  const file = await ctx.api.getFile(project.id, path);
+  const content = String(file.content || '');
+  const index = content.indexOf(params.search);
+  if (index < 0 || content.indexOf(params.search, index + 1) >= 0) return FAIL('search 必须唯一匹配；请先读取文件并扩大匹配范围。');
+  return execFileWrite(ctx, { path, content: content.slice(0, index) + params.replacement + content.slice(index + params.search.length) });
+}
+
 const EXECUTORS = {
+  deck_set_navigation: execNavigation,
+  deck_generate_image: execGenerateImage,
+  deck_insert_math: (ctx,p)=>execRich(ctx,p,'math'),
+  deck_insert_svg: (ctx,p)=>execRich(ctx,p,'svg'),
+  deck_auto_fonts: execAutoFonts,
+  fonts_list: async(_ctx,p)=>{const fonts=availableFonts(),r=recommendFonts({...p,fonts});return {ok:true,fonts,recommendation:{heading:r.heading,body:r.body,mono:r.mono,reason:r.reason}};},
+  app_list_apis: execListApis,
+  app_call_api: execCallApi,
+  tool_result_read: execResultRead,
+  file_patch: execFilePatch,
   deck_get_state: execGetState,
   deck_read_slide: execReadSlide,
   deck_get_element: execGetElement,
@@ -1878,7 +2104,14 @@ export function createToolExecutor(ctx) {
       }
       const params = args && typeof args === 'object' ? args : {};
       try {
-        const result = await run(ctx, params);
+        if (name === 'app_call_api') {
+          const operation = API_CATALOG.find((op) => op.id === params.operation);
+          if (operation && permissionRank(opts.permission) < permissionRank(operation.permission)) return FAIL('接口需要「' + permissionLabel(operation.permission) + '」权限。');
+        }
+        if (name === 'app_run_command' && permissionRank(opts.permission) < permissionRank(commandAccess(String(params.name || '')))) return FAIL('命令权限不足');
+        const projectId = mutationProject(ctx, name, params);
+        if (projectId) await opts.beforeMutation?.(projectId);
+        const result = await run(ctx, params, opts);
         if (!result || typeof result !== 'object') return { ok: true, result };
         return result;
       } catch (err) {

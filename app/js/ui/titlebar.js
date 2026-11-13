@@ -151,6 +151,7 @@ function buildLibrary() {
     ),
     h('span', { class: 'tb-sep' }),
     iconBtn({ name: 'command', tip: '命令面板', kbd: 'Ctrl K', onClick: () => cmd('app.commandPalette') }),
+    iconBtn({ name: 'terminal', tip: '打开 Agent', kbd: 'Ctrl Shift E', onClick: () => cmd('app.toggleAgent') }),
     iconBtn({ name: 'sparkles', tip: 'AI 设置', onClick: () => cmd('app.settings') }),
     themeBtn,
     iconBtn({ name: 'help', tip: '快捷键与帮助', onClick: () => cmd('help.shortcuts') }),

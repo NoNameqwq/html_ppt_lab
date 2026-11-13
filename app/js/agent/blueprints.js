@@ -458,8 +458,10 @@ export function buildCreationBrief(opts = {}) {
   const pages = Math.max(3, Math.min(20, Number(opts.pages) || 8));
   const scene = getScene(opts.sceneId) || null;
   const dir = getDirection(opts.directionId) || getDirection(scene && scene.direction) || getDirection(guessDirection(topic));
-  const plan = planPages(pages, scene);
+  const plan = planPages(pages >= 6 ? pages - 1 : pages, scene);
+  if (pages >= 6) plan.splice(1, 0, { kind: 'navigation', title: '章节目录', goal: '按内容组织 2–4 章，用 navigation 配置可跳转的花瓣 / 轨道 / 阶梯目录；占总页数中的一页，不增加页数' });
   const kinds = plan.map((p, i) => {
+    if (p.kind === 'navigation') return `${i + 1}. ${p.title}｜${p.goal}。目标 slideIndex 使用最终 slides 数组的 0 起始索引，不能指向自身。`;
     const kind = PAGE_KINDS.find((k) => k.id === p.kind) || PAGE_KINDS[0];
     return `${i + 1}. ${p.title || kind.name}｜页型 ${kind.name}（${kind.id}）：${p.goal || kind.goal}；坐标：${kind.coords}`;
   }).join('\n');
@@ -486,6 +488,7 @@ ${kinds}
 6. 结束后自检：deck_get_state 确认页数与切换；再补 2–3 处细节（转场叠加 / 时间线 / 全局 CSS），不要追加新页。
 7. 不要使用「PPT」「幻灯片」「模板」这些词；不要 emoji（${dir.id === 'clay' ? '最多 1 个' : '一个都不要'}）；不要外链字体与图片。
 8. 如果主题本身信息不足：用合理的行业常识补全，并在最后一行说明假设；不要停下来反问。
+9. 页面知识表达：公式用 math 元素或 HTML 内 LaTeX，讲解结构、因果与流程用可编辑 SVG；内容页继承目录章节的颜色、形状与视觉母题。
 
 执行顺序（照做）
 ① deck_compose { direction:"${dir.id}", slides:[…${pages} 页…] }
@@ -502,7 +505,7 @@ export const CREATION_GUIDE = `## 创作模式（用户只给主题时）
 
 流程（最多 4 步）：
 1. 定方向：从下面的方向目录选一个最贴合主题的（用户指定则服从）；用户没指定页数时默认 8 页（3–20 页可调）。
-2. 定脚本：按「钩子 → 冲突 → 解法 → 证据 → 行动」排页；封面 / 金句 / 数据 / 左右分栏 / 网格 / 引言 / 章节 / 收尾 交替使用。
+2. 定脚本：先用 2–4 章把「钩子 → 冲突 → 解法 → 证据 → 行动」组织起来；≥6 页且章节清晰时在封面后留 1 页动画目录，计入总页数；≤5 页通常用轻导航。内容页交替使用论点 / 数据 / 左右分栏 / 图解 / 引言，延续章节母题。
 3. 一次成型：调用 deck_compose 写入整套页面（direction + slides），元素坐标参考页型配方；每页必须有 1 个视觉锚点。
 4. 加效果 + 自检：deck_set_transition_fx 叠加 2–3 处屏闪/飞入/扫光；需要贯穿效果时 deck_set_timeline；最后 deck_get_state 复核页数与切换。
 

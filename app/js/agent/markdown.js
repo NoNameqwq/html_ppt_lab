@@ -1,6 +1,7 @@
 /* Agent 消息的安全 Markdown 渲染器：先整体转义，再做受控格式化 */
 
 import { escapeHtml, copyText } from '../core/dom.js';
+import { protectRichContent } from '../core/rich-content.js';
 
 /* ---------- 行内处理 ---------- */
 
@@ -95,7 +96,7 @@ function parseBlocks(src) {
       continue;
     }
 
-    // 表格（降级为列表）
+    // Tables keep their structure and scroll horizontally in narrow panels.
     if (isTableStart(lines, i)) {
       const rows = [];
       const header = lines[i].replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
@@ -168,9 +169,9 @@ function renderBlocks(blocks) {
         break;
       }
       case 'table': {
-        const head = b.header.filter(Boolean).join(' · ');
-        const items = b.rows.map((row) => '<li>' + row.filter(Boolean).map((c) => inline(c)).join(' · ') + '</li>').join('');
-        out.push('<ul class="md-table-fallback">' + (head ? '<li class="md-table-head">' + inline(head) + '</li>' : '') + items + '</ul>');
+        const head = b.header.map((c) => '<th scope="col">' + inline(c) + '</th>').join('');
+        const rows = b.rows.map((row) => '<tr>' + row.map((c) => '<td>' + inline(c) + '</td>').join('') + '</tr>').join('');
+        out.push('<div class="md-table-wrap"><table><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table></div>');
         break;
       }
       default:
@@ -187,8 +188,8 @@ function renderBlocks(blocks) {
  */
 export function markdownToHtml(src) {
   if (src == null || src === '') return '';
-  const escaped = escapeHtml(String(src));
-  return renderBlocks(parseBlocks(escaped));
+  const rich = protectRichContent(String(src));
+  return rich.restore(renderBlocks(parseBlocks(escapeHtml(rich.src))));
 }
 
 /** 渲染到容器（替换内容） */
@@ -271,11 +272,11 @@ export function attachMarkdownActions(container) {
   return () => container.removeEventListener('click', onClick);
 }
 
-/** 粗略估算 token 数（中文 ≈ 0.62 token/字，用于上下文提示） */
+/** Conservative estimate for mixed Chinese/code; reserve space before provider context limits. */
 export function estimateTokens(text) {
   const s = String(text || '');
   if (!s) return 0;
   const cjk = (s.match(/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/g) || []).length;
   const rest = s.length - cjk;
-  return Math.ceil(cjk * 0.62 + rest * 0.3);
+  return Math.ceil(cjk * 1.5 + rest * 0.35);
 }

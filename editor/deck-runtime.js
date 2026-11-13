@@ -645,6 +645,11 @@
     if (s === 'last') { go(slides.length - 1); return true; }
     if (s === 'replay') { if (el && el.getAttribute('data-wpx-anim')) playOne({ el: el, name: el.getAttribute('data-wpx-anim'), params: parseParams(el) }, false); else replay(); return true; }
     if (s === 'timeline') { timelinePlaying ? timelinePause() : timelinePlay(); return true; }
+    if (s.indexOf('go-id:') === 0) {
+      var targetId = s.slice(6), targetIndex = slides.findIndex(function (slide) { return slide.getAttribute('data-id') === targetId; });
+      if (targetIndex >= 0) go(targetIndex);
+      return true;
+    }
     if (s.indexOf('go:') === 0) { var n = parseInt(s.slice(3), 10); if (n >= 1) go(n - 1); return true; }
     if (s.indexOf('url:') === 0) { var url = s.slice(4).trim(); if (url) window.open(url, '_blank', 'noopener'); return true; }
     if (s.indexOf('js:') === 0) { try { (new Function(s.slice(3))).call(window); } catch (e) { console.warn('[WPX] 交互脚本失败', e); } return true; }
@@ -847,7 +852,22 @@
       var inRecs = readTrRecords(nextEl, 'in');
       var outRecs = readTrRecords(prevEl, 'out');
       var custom = customTransitionFor(nextEl.dataset.transition);
-      if (inRecs.length || outRecs.length) {
+      var navNode = prevEl && Array.from(prevEl.querySelectorAll('[data-wds-target]')).find(function (node) { return node.getAttribute('data-wds-target') === nextEl.getAttribute('data-id'); });
+      var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (navNode && mode === 'present' && !reduceMotion) {
+        // Grow the chosen petal/orbit/chapter itself into the next scene. IDs
+        // survive page reordering; no per-deck script or numeric links needed.
+        prevEl.style.zIndex = '3'; nextEl.style.zIndex = '2'; navNode.style.zIndex = '99';
+        var navAnimations = [
+          navNode.animate([{ transform: getComputedStyle(navNode).transform }, { transform: 'rotate(0deg) scale(15)' }], { duration: duration, easing: 'cubic-bezier(.76,0,.24,1)', fill: 'both' }),
+          prevEl.animate([{ opacity: 1 }, { opacity: 1, offset: .5 }, { opacity: 0 }], { duration: duration, fill: 'both' }),
+          nextEl.animate([{ opacity: 0 }, { opacity: 0, offset: .3 }, { opacity: 1 }], { duration: duration, fill: 'both' })
+        ];
+        task = Promise.allSettled(navAnimations.map(function (animation) { return animation.finished; })).then(function () {
+          prevEl.classList.remove('is-active'); prevEl.style.zIndex = ''; nextEl.style.zIndex = ''; navNode.style.zIndex = '';
+          navAnimations.forEach(function (animation) { animation.cancel(); });
+        });
+      } else if (inRecs.length || outRecs.length) {
         task = playCapturedTransition(prevEl, nextEl);
       } else if (custom) {
         task = Promise.resolve()

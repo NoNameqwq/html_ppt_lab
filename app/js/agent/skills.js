@@ -32,6 +32,8 @@ function normalizeSkill(raw) {
     desc: String(raw.desc || ''),
     category: String(raw.category || 'design'),
     default: !!raw.default,
+    source: typeof raw.source === 'string' ? raw.source : '',
+    license: typeof raw.license === 'string' ? raw.license : '',
     content: typeof raw.content === 'string' ? raw.content : '',
   };
 }
@@ -154,7 +156,8 @@ export function openManager(ctx, opts = {}) {
             h('span', { class: 'ask-row-name' }, s.name),
             h('span', { class: 'badge badge--muted' }, s.id)
           ),
-          h('div', { class: 'ask-row-desc' }, s.desc || '')
+          h('div', { class: 'ask-row-desc' }, s.desc || ''),
+          /^https:\/\/github\.com\//.test(s.source || '') ? h('a', { href: s.source, target: '_blank', rel: 'noopener', class: 'author-hint', onClick: (e) => e.stopPropagation() }, '开源来源 · ' + s.license) : null
         ),
         h('span', { class: 'switch' }, input, h('i'))
       );

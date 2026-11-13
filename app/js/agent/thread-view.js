@@ -1,0 +1,134 @@
+import { h, copyText } from '../core/dom.js';
+import { icon } from '../ui/icons.js';
+import { createStreamMarkdown } from './markdown.js';
+import { mergeContinuation } from './conversation.js';
+import { getToolMeta } from './tools.js';
+
+const glyph = (name, size = 15) => h('span', { class: 'agw-glyph', html: icon(name, size) });
+const button = (label, name, action) => h('button', { type: 'button', class: 'agw-icon', title: label, 'aria-label': label, onClick: action }, glyph(name));
+
+/** Plain prose and a single operation ledger. No per-round cards or assistant headers. */
+export function createThreadView({ streaming = false, scroll, resume, undo, versions, openProject }) {
+  const el = h('article', { class: 'agw-turn', 'aria-label': '助手回复', 'data-running': String(streaming) });
+  const ledger = h('details', { class: 'agw-ledger hidden', open: true });
+  const ledgerLabel = h('span', {}, '正在处理');
+  const ledgerBody = h('div', { class: 'agw-ledger-body' });
+  ledger.append(h('summary', {}, glyph('chevron-down', 12), ledgerLabel), ledgerBody);
+  const foot = h('div', { class: 'agw-turn-actions hidden' });
+  const copy = button('复制回复', 'copy', async () => {
+    await copyText(parts.map((p) => p.content).filter(Boolean).join('\n\n'));
+    copy.replaceChildren(glyph('check')); setTimeout(() => copy.replaceChildren(glyph('copy')), 1200);
+  });
+  const again = h('button', { type: 'button', class: 'agw-text-button hidden', onClick: () => resume() }, glyph('play', 12), '继续处理');
+  const note = h('span', { class: 'agw-turn-note' });
+  const version = h('button', { type: 'button', class: 'agw-text-button agw-turn-version hidden', onClick: () => versions?.() }, glyph('history', 13), '本轮版本');
+  const deliveries=h('div',{class:'agw-deliveries hidden'});
+  foot.append(copy, again, version, note); el.append(ledger, deliveries, foot);
+  const parts = [], tools = new Map();
+  let previewCleanup=[];
+  let part = null, continued = false, finished = false, incomplete = false, stopped = false, failureCount = 0;
+  const started = performance.now();
+  function beginRound() {
+    if (continued && parts.length) { continued = false; part = parts.at(-1); part.carry = part.content; return; }
+    closePart();
+    const md = h('div', { class: 'agw-prose hidden' }); el.insertBefore(md, deliveries);
+    part = { md, content: '', carry: '', stream: createStreamMarkdown(md, { minInterval: 60 }), thought: null }; parts.push(part);
+  }
+  function current() { if (!part) beginRound(); return part; }
+  function closePart() { if (part) { part.stream.finish(part.content); part = null; } }
+  function ensureTool(call) {
+    if (tools.has(call.id)) return tools.get(call.id);
+    ledger.classList.remove('hidden');
+    const meta = getToolMeta(call.function.name), detail = h('details', { class: 'agw-operation', 'data-state': 'pending' });
+    let args; try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
+    const target = args.path || args.name || args.operation || args.elementId || (Number.isInteger(args.index) ? '第 ' + (args.index + 1) + ' 页' : '');
+    const label = h('span', { class: 'agw-operation-label' }, meta.label), targetLabel = h('span', { class: 'agw-operation-target' }, String(target)), mark = h('span', { class: 'agw-operation-mark' });
+    detail.append(h('summary', {}, glyph(meta.kind === 'read' ? 'terminal' : 'edit'), label, targetLabel, mark));
+    const more = h('div', { class: 'agw-operation-detail' }); detail.append(more); ledgerBody.append(detail);
+    let result = null, rendered = false;
+    const render = () => {
+      if (!detail.open || rendered) return; rendered = true;
+      more.append(h('div', { class: 'agw-detail-label' }, call.function.name), h('pre', {}, JSON.stringify(args, null, 2)));
+      if (result) more.append(h('div', { class: 'agw-detail-label' }, '返回结果'), h('pre', {}, JSON.stringify(result, null, 2)));
+      if (result?.url) more.append(h('a', { href: result.url, target: '_blank', rel: 'noopener' }, '打开结果 ↗'));
+      if (result?.opId) {
+        const revert = h('button', { type: 'button', class: 'agw-text-button', onClick: async () => {
+          revert.disabled = true;
+          try { await undo(result.opIds?.length ? result.opIds : [result.opId]); revert.textContent = '已撤回'; }
+          catch (err) { revert.disabled = false; revert.textContent = err.message; }
+        } }, '撤回这次修改'); more.append(revert);
+      }
+    };
+    detail.addEventListener('toggle', render);
+    const row = {
+      el: detail,
+      setState(state) { detail.dataset.state = state; ledgerLabel.textContent = meta.label + (target ? ' · ' + target : ''); scroll(); },
+      setResult(value) {
+        result = value; detail.dataset.state = value?.ok === false || value?.error ? 'error' : 'done';
+        if (detail.dataset.state === 'error') { mark.textContent = '失败'; failureCount++; }
+        if (value?.summary) targetLabel.textContent = value.summary;
+        rendered = false; more.replaceChildren(); render(); scroll();
+      },
+      setMissing() { this.setResult({ ok: false, error: '操作被中止，未取得结果；请先检查当前状态。' }); },
+    };
+    tools.set(call.id, row); return row;
+  }
+  return {
+    el, beginRound, ensureTool,
+    setDeliveries(items=[]) {
+      previewCleanup.forEach((f)=>f());previewCleanup=[];
+      deliveries.replaceChildren();deliveries.classList.toggle('hidden',!items.length);
+      for(const item of items) {
+        if(!item.projectId||!item.versionId)continue;
+        const root=`/api/projects/${encodeURIComponent(item.projectId)}/versions/${encodeURIComponent(item.versionId)}`;
+        const preview=h('div',{class:'agw-delivery-preview'}),frame=h('iframe',{src:root+'/preview?wpx=thumb&slide=0',title:item.name+' · 交付预览',sandbox:'allow-scripts',loading:'lazy',tabindex:'-1','aria-hidden':'true'});
+        preview.append(frame);
+        const resize=new ResizeObserver(()=>{frame.style.transform=`scale(${preview.clientWidth/1920})`;});resize.observe(preview);
+        frame.addEventListener('load',()=>{frame.style.transform=`scale(${preview.clientWidth/1920})`;},{once:true});
+        const play=h('a',{class:'agw-delivery-play',href:root+'/present',target:'_blank',rel:'noopener'},glyph('play',14),'放映');
+        const edit=h('button',{type:'button',class:'agw-text-button',onClick:()=>openProject?.(item.projectId)},glyph('edit',13),'编辑');
+        const download=h('a',{class:'agw-text-button',href:root+'/export',download:''},glyph('download',13),'导出');
+        const card=h('section',{class:'agw-delivery','aria-label':'对话交付'},preview,h('div',{class:'agw-delivery-info'},h('span',{class:'agw-delivery-caption'},item.status==='partial'?'进度版本':'本轮交付'),h('strong',{},item.name),h('small',{},`${item.slideCount} 页 · 已保存此轮版本`),h('div',{class:'agw-delivery-actions'},play,edit,download)));
+        deliveries.append(card);
+        // Disconnect detached previews when conversation history is rebuilt.
+        const observer=new MutationObserver(()=>{if(!el.isConnected){resize.disconnect();observer.disconnect();}});observer.observe(document.getElementById('agent-panel'),{childList:true,subtree:true});previewCleanup.push(()=>{resize.disconnect();observer.disconnect();});
+      }
+      scroll();
+    },
+    setVersion(available) { version.classList.toggle('hidden', !available); },
+    setContent(text) { const p = current(); p.content = mergeContinuation(p.carry, text); p.md.classList.remove('hidden'); p.stream.update(p.content); scroll(); },
+    setReasoning(text) {
+      const p = current();
+      if (!p.thought) {
+        ledger.classList.remove('hidden');
+        const body = h('div', { class: 'agw-thought-text' }), label = h('span', {}, '思考中');
+        p.thought = h('details', { class: 'agw-thought' }, h('summary', {}, glyph('brain', 14), label, glyph('chevron-down', 11)), body);
+        p.thought.body = body; p.thought.label = label; ledgerBody.append(p.thought);
+      }
+      p.thought.body.textContent = text;
+    },
+    setToolCalls(calls) { (calls || []).forEach(ensureTool); },
+    toolStart(call) { ensureTool(call).setState('running'); },
+    toolResult(call, result) { ensureTool(call).setResult(result); },
+    noteRoundEnd(msg, meta = {}) {
+      const p = current();
+      if (typeof msg.content === 'string') { p.content = msg.content; p.stream.finish(p.content); p.md.classList.toggle('hidden', !p.content); }
+      if (p.thought) p.thought.label.textContent = '查看思考过程';
+      incomplete = !!msg.incomplete || !!meta.incomplete; stopped = !!msg.aborted || !!meta.aborted;
+    },
+    finishRound(msg, meta) { this.noteRoundEnd(msg, meta); closePart(); },
+    continuation(info) { continued = true; ledgerLabel.textContent = info.unexpected ? '连接恢复中…' : '继续生成…'; },
+    reopen() { finished = false; incomplete = false; stopped = false; foot.classList.add('hidden'); el.dataset.running = 'true'; ledger.open = true; return this; },
+    disableResume() { again.classList.add('hidden'); },
+    hasContent() { return parts.some((p) => p.content) || tools.size > 0; },
+    finish(msg = {}, meta = {}) {
+      if (finished) return; finished = true; closePart(); stopped ||= !!meta.aborted; incomplete ||= !!meta.incomplete;
+      el.dataset.running = 'false';
+      ledgerLabel.textContent = tools.size ? `已执行 ${tools.size} 项操作${failureCount ? ' · ' + failureCount + ' 项失败' : ''}` : '查看思考过程';
+      ledger.open = failureCount > 0;
+      foot.classList.remove('hidden'); again.classList.toggle('hidden', !stopped && !incomplete);
+      note.textContent = stopped ? '已停止 · 进度已保留' : incomplete ? '尚未完成' : meta.replay ? '' : `${Math.max(1, Math.round((performance.now() - started) / 1000))} 秒`;
+      if (!parts.some((p) => p.content) && !tools.size && !incomplete && !stopped) el.remove(); scroll();
+    },
+  };
+}

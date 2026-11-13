@@ -5,11 +5,22 @@
   "type": "module",
   "description": "WebDeck Studio · 网页演播工作台（仿 PowerPoint 界面 + 内置 AI Agent）",
   "scripts": {
+    "postinstall": "node scripts/sync-vendor.mjs",
     "start": "node server.mjs",
     "dev": "node server.mjs",
-    "qa": "node scripts/qa.mjs"
+    "qa": "node scripts/qa.mjs",
+    "test:agent": "node --test scripts/agent-runtime.test.mjs scripts/version-store.test.mjs",
+    "test:authoring": "node --test scripts/authoring.test.mjs scripts/image-generation.test.mjs",
+    "qa:agent": "node scripts/qa-agent-workspace.mjs",
+    "qa:authoring": "node scripts/qa-authoring-features.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "dompurify": "^3.4.17",
+    "fast-xml-parser": "^5.12.1",
+    "jszip": "^3.10.1",
+    "katex": "^0.19.1"
   }
 }

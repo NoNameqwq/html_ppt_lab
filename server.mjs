@@ -1,6 +1,6 @@
 /**
  * WebDeck Studio · 本地服务
- * 零依赖 Node HTTP 服务：静态资源 + 工程文件管理 + 导入 + 缩略图 + AI 代理（DeepSeek / OpenCode Go）
+ * Node HTTP 服务：静态资源 + 工程 / 模板 / PPT 导入 + 缩略图 + AI 代理
  * 启动：node server.mjs   默认 http://127.0.0.1:4321
  */
 import http from 'node:http';
@@ -10,6 +10,14 @@ import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { proxyChat } from './server/agent-proxy.mjs';
+import { readChat, saveChat, listChats } from './server/chat-store.mjs';
+import { withProjectLock, captureVersion, listVersions, inspectVersion, restoreVersion, recoverVersionTransaction, readVersionFile } from './server/version-store.mjs';
+import { deckDocument } from './server/deck-document.mjs';
+import { templateStore } from './server/templates.mjs';
+import { convertPowerPoint } from './server/powerpoint.mjs';
+import { API_CATALOG } from './app/js/agent/api-catalog.js';
+import { DEFAULT_IMAGE_SETTINGS, publicImageSettings, updateImageSettings, generateImage } from './server/image-generation.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.join(ROOT, 'app');
@@ -17,14 +25,20 @@ const EDITOR_DIR = path.join(ROOT, 'editor');
 const TEMPLATES_DIR = path.join(ROOT, 'templates');
 const SKILLS_DIR = path.join(ROOT, 'skills');
 const SAMPLES_DIR = path.join(ROOT, 'samples');
-const PROJECTS_DIR = path.join(ROOT, 'projects');
-const DATA_DIR = path.join(ROOT, 'data');
+const PROJECTS_DIR = process.env.WDS_PROJECTS_DIR ? path.resolve(process.env.WDS_PROJECTS_DIR) : path.join(ROOT, 'projects');
+const DATA_DIR = process.env.WDS_DATA_DIR ? path.resolve(process.env.WDS_DATA_DIR) : path.join(ROOT, 'data');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const MODELS_CACHE_FILE = path.join(DATA_DIR, 'models-dev.json');
 const PORT = Number(process.env.PORT || 4321);
 const HOST = process.env.HOST || '127.0.0.1';
 const VERSION = '1.0.0';
 const startedAt = Date.now();
+const templateLibrary=templateStore({customRoot:path.join(DATA_DIR,'templates'),builtinRoot:TEMPLATES_DIR});
+const sharedDeckFile=async(rel)=>{
+  if(!rel.startsWith('/editor/')&&!rel.startsWith('/app/vendor/'))return null;
+  const file=path.resolve(ROOT,'.'+rel);if(!within(ROOT,file))return null;
+  return fs.readFile(file).catch(()=>null);
+};
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
@@ -55,6 +69,7 @@ const DEFAULT_PROVIDERS = [
 const log = (...args) => console.log('[wds]', ...args);
 const now = () => Date.now();
 const enc = encodeURIComponent;
+function decodeUpload(dataUrl){const value=/^data:[^,]*;base64,([a-zA-Z0-9+/=\r\n]+)$/.exec(String(dataUrl||''));if(!value)throw new Error('需要 base64 文件内容');const data=Buffer.from(value[1],'base64');if(!data.length||data.length>40*1024*1024)throw new Error('文件为空或超过 40MB');return data;}
 
 async function ensureDirs() {
   for (const d of [PROJECTS_DIR, DATA_DIR, SAMPLES_DIR, SKILLS_DIR, TEMPLATES_DIR]) {
@@ -76,6 +91,7 @@ function defaultSettings() {
     ui: { theme: 'light' },
     agent: { temperature: 0.7, contextLimit: 100000000, maxTokens: 0, streaming: true },
     search: { provider: 'deepseek', apiKey: '', baseUrl: 'https://api.deepseek.com', maxResults: 5 },
+    imageGeneration: { ...DEFAULT_IMAGE_SETTINGS },
   };
 }
 function genId(name = 'deck') {
@@ -182,10 +198,15 @@ async function runtimeAssets() {
 function invalidateRuntimeCache() { INLINE_RUNTIME_CACHE.clear(); }
 
 async function buildDeckFromTemplate(templateId) {
-  const dir = path.join(TEMPLATES_DIR, templateId || 'blank');
+  const dir = templateLibrary.directory(templateId || 'blank');
   let html = null;
   try { html = await fs.readFile(path.join(dir, 'index.html'), 'utf8'); } catch { html = null; }
   if (!html) html = fallbackDeck(templateId);
+  const meta=await readJson(path.join(dir,'template.json'),{});
+  if(meta.kind==='raw')return html;
+  return inlineDeckRuntime(html);
+}
+async function inlineDeckRuntime(html) {
   const rt = await runtimeAssets();
   html = html.replace(/<link\b[^>]*data-wpx-inline=["']css["'][^>]*>/i, () => `<style id="wpx-runtime-css">${rt.css}</style>`);
   html = html.replace(/<script\b[^>]*src=["'][^"']*fx-presets\.js["'][^>]*>\s*<\/script>/i, () => `<script id="wpx-fx">${rt.fx}</script>`);
@@ -239,7 +260,9 @@ function fallbackDeck(templateId) {
 }
 
 async function createProject({ name, templateId = 'blank' }) {
-  const tplMeta = await readJson(path.join(TEMPLATES_DIR, templateId, 'template.json'), {});
+  const templateDir=templateLibrary.directory(templateId);
+  const tplMeta = await readJson(path.join(templateDir, 'template.json'), {});
+  if(templateId.startsWith('custom-')&&!(await exists(path.join(templateDir,'index.html'))))throw Object.assign(new Error('模板不存在'),{status:404});
   const finalName = String(name || tplMeta.name || '未命名演示').trim().slice(0, 80);
   const id = genId(finalName);
   const dir = projectDir(id);
@@ -247,10 +270,11 @@ async function createProject({ name, templateId = 'blank' }) {
   await fs.mkdir(path.join(dir, 'original'), { recursive: true });
   await fs.mkdir(path.join(dir, '.versions'), { recursive: true });
   const html = await buildDeckFromTemplate(templateId);
+  if(templateId.startsWith('custom-'))for(const[rel,bytes]of await templateLibrary.files(templateDir)){const target=path.join(dir,rel);await fs.mkdir(path.dirname(target),{recursive:true});await fs.writeFile(target,bytes);}
   await fs.writeFile(path.join(dir, 'index.html'), html, 'utf8');
   const ts = now();
   const project = {
-    id, name: finalName, kind: 'native',
+    id, name: finalName, kind: tplMeta.kind==='raw'?'raw':'native',
     createdAt: ts, updatedAt: ts,
     slideCount: countSlides(html) || 1,
     theme: tplMeta.theme || 'ink',
@@ -281,7 +305,20 @@ function extractAssetRefs(html) {
   return [...refs];
 }
 
-async function importProject({ fileName, content, sourcePath, sampleId, name, mode }) {
+async function importProject({ fileName, content, sourcePath, sampleId, name, mode, dataUrl, pptMode, importId }) {
+  if(importId){if(!/^upload-[a-z0-9-]+$/.test(importId))throw new Error('附件 ID 无效');const staged=await readJson(path.join(DATA_DIR,'imports',importId+'.json'));if(!staged)throw new Error('附件不存在');sourcePath=path.join(DATA_DIR,'imports',importId+path.extname(staged.fileName).toLowerCase());fileName=staged.fileName;}
+  if(/\.pptx?$/i.test(fileName||sourcePath||'')) {
+    let bytes;
+    if(sourcePath){const stat=await fs.stat(path.resolve(sourcePath));if(!stat.isFile()||stat.size>40*1024*1024)throw new Error('PPT 文件无效或超过 40MB');bytes=await fs.readFile(path.resolve(sourcePath));}
+    else bytes=decodeUpload(dataUrl);
+    const title=String(name||path.basename(fileName||'演示',path.extname(fileName||''))).trim().slice(0,80),converted=await convertPowerPoint(bytes,{fileName:fileName||sourcePath,name:title,mode:pptMode||'editable'});
+    const project=await createProject({name:title,templateId:'blank'}),dir=projectDir(project.id);
+    await fs.writeFile(path.join(dir,'index.html'),await inlineDeckRuntime(converted.html));
+    for(const[rel,data]of converted.assets){await fs.mkdir(path.dirname(path.join(dir,rel)),{recursive:true});await fs.writeFile(path.join(dir,rel),data);}
+    const original='source'+(/\.ppt$/i.test(fileName||sourcePath)?'.ppt':'.pptx');await fs.writeFile(path.join(dir,'original',original),bytes);
+    await writeJson(path.join(dir,'original','import-report.json'),converted.report);
+    Object.assign(project,{kind:'native',slideCount:converted.report.slides,hasOriginal:true,origin:{type:'powerpoint',fileName:fileName||path.basename(sourcePath),mode:pptMode||'editable'},importReport:converted.report});await writeJson(path.join(dir,'project.json'),project);return project;
+  }
   const rawMode = mode === 'raw';
   let html = '';
   let baseDir = null;
@@ -434,11 +471,14 @@ async function upgradeProjectRuntime(id) {
 
 /* ==========================================================================
    设置 / 技能 / 模板 / 示例
-   ========================================================================== */async function getSettings() {
+   ========================================================================== */
+async function getSettings() {
   const settings = (await readJson(SETTINGS_FILE, null)) || defaultSettings();
   const merged = defaultSettings();
   merged.ui = { ...merged.ui, ...(settings.ui || {}) };
   merged.agent = { ...merged.agent, ...(settings.agent || {}) };
+  merged.search = { ...merged.search, ...(settings.search || {}) };
+  merged.imageGeneration = { ...merged.imageGeneration, ...(settings.imageGeneration || {}) };
   const byId = new Map((settings.providers || []).map((p) => [p.id, p]));
   for (const def of merged.providers) {
     const saved = byId.get(def.id);
@@ -468,6 +508,7 @@ async function getPublicSettings() {
     ui: settings.ui,
     agent: settings.agent,
     search: publicSearchSettings(settings),
+    imageGeneration: publicImageSettings(settings.imageGeneration),
     skillsCatalog: await listSkills(),
   };
 }
@@ -547,6 +588,7 @@ async function handleSearch(body = {}) {
   return { ok: true, provider, query, count: results.length, results };
 }
 async function updateSettings(patch = {}) {
+  if (Object.hasOwn(patch, 'imageGeneration')) throw Object.assign(new Error('生图配置只能由用户在「生图设置」中保存，Agent 不可代为开启'), { status: 403 });
   const settings = await getSettings();
   if (patch.ui) settings.ui = { ...settings.ui, ...patch.ui };
   if (patch.agent) settings.agent = { ...settings.agent, ...patch.agent };
@@ -586,11 +628,21 @@ function providerKey(provider, explicitKey) {
 }
 
 async function listSkills() {
-  const entries = await fs.readdir(SKILLS_DIR, { withFileTypes: true }).catch(() => []);
+  const files = [];
+  async function scan(directory, depth = 0) {
+    if (depth > 4) return;
+    const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+      if (e.name.startsWith('.') || ['licenses','vendor'].includes(e.name)) continue;
+      const file = path.join(directory, e.name);
+      if (e.isDirectory()) await scan(file, depth + 1);
+      else if (e.isFile() && e.name.endsWith('.md')) files.push(file);
+    }
+  }
+  await scan(SKILLS_DIR);
   const out = [];
-  for (const e of entries) {
-    if (!e.isFile() || !e.name.endsWith('.md')) continue;
-    const raw = await fs.readFile(path.join(SKILLS_DIR, e.name), 'utf8').catch(() => '');
+  for (const file of files) {
+    const raw = await fs.readFile(file, 'utf8').catch(() => '');
     if (!raw) continue;
     const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(raw);
     const meta = {};
@@ -600,13 +652,15 @@ async function listSkills() {
         if (m) meta[m[1]] = m[2].replace(/^["']|["']$/g, '');
       }
     }
-    const body = fm ? raw.slice(fm[0].length) : raw;
+    if (!fm || !meta.id) continue;
+    const body = raw.slice(fm[0].length);
     out.push({
-      id: meta.id || e.name.replace(/\.md$/, ''),
-      name: meta.name || e.name.replace(/\.md$/, ''),
+      id: meta.id,
+      name: meta.name || path.basename(file, '.md'),
       desc: meta.desc || '',
       category: meta.category || 'general',
       default: meta.default === 'true',
+      source: meta.source || '', license: meta.license || '',
       content: body.trim(),
     });
   }
@@ -631,7 +685,8 @@ async function listTemplates() {
       order: meta?.order ?? 99,
     });
   }
-  out.sort((a, b) => a.order - b.order);
+  out.push(...await templateLibrary.list());
+  out.sort((a, b) => (a.order??100) - (b.order??100));
   return out;
 }
 
@@ -928,261 +983,9 @@ async function handleChat(req, res, body) {
   const toolChoice = body.toolChoice && typeof body.toolChoice === 'object' && body.toolChoice.function && body.toolChoice.function.name ? String(body.toolChoice.function.name) : '';
   const sessionId = chatSessionId(base, body, messages);
 
-  if (wire === 'anthropic') return proxyAnthropic({ res, base, key, model, messages, tools, maxTokens, temperature, stream, reasoningEffort, sessionId, toolChoice });
-  return proxyOpenAI({ res, base, key, model, messages, tools, maxTokens, temperature, stream, reasoningEffort, sessionId, toolChoice });
-}
-
-function normalizeOpenAIMessages(messages) {
-  return messages.map((m) => {
-    if (m.role === 'assistant' && Array.isArray(m.tool_calls) && m.tool_calls.length) {
-      return {
-        role: 'assistant',
-        content: m.content || null,
-        tool_calls: m.tool_calls.map((tc) => ({ id: tc.id, type: 'function', function: { name: tc.function?.name, arguments: tc.function?.arguments || '{}' } })),
-      };
-    }
-    if (m.role === 'tool') return { role: 'tool', tool_call_id: m.tool_call_id, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) };
-    return { role: m.role, content: m.content };
-  });
-}
-
-/** 兼容性重试：部分模型拒绝 temperature / reasoning_effort / tool_choice / 过大的 max_tokens，逐项降级 */
-async function postJsonWithCompat(url, headers, payload) {
-  const post = () => fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
-  let upstream = await post();
-  if (upstream.ok) return { upstream, text: '' };
-  let text = await upstream.text().catch(() => '');
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    let changed = false;
-    if ('tool_choice' in payload && /tool[_ ]choice/i.test(text)) { payload.tool_choice = 'auto'; changed = true; }
-    else if ('temperature' in payload && /temperature/i.test(text)) { delete payload.temperature; changed = true; }
-    else if ('reasoning_effort' in payload && /reasoning[_ ]effort/i.test(text)) { delete payload.reasoning_effort; changed = true; }
-    else if ('stream_options' in payload && /stream_options/i.test(text)) { delete payload.stream_options; changed = true; }
-    else if ('max_tokens' in payload && /max[_\s-]?tokens|too large|maximum.*tokens|out of range|exceed/i.test(text)) {
-      const next = Math.floor(Number(payload.max_tokens || 8192) / 2);
-      if (next < 1024) break;
-      payload.max_tokens = next;
-      changed = true;
-    }
-    if (!changed) break;
-    upstream = await post();
-    if (upstream.ok) return { upstream, text: '' };
-    text = await upstream.text().catch(() => '');
-  }
-  return { upstream: null, status: upstream.status, text };
-}
-
-async function proxyOpenAI({ res, base, key, model, messages, tools, maxTokens, temperature, stream, reasoningEffort, sessionId, toolChoice }) {
-  const payload = { model, messages: normalizeOpenAIMessages(messages), stream, temperature, max_tokens: maxTokens };
-  if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
-  if (tools.length) { payload.tools = tools; payload.tool_choice = toolChoice ? { type: 'function', function: { name: toolChoice } } : 'auto'; }
-  if (stream) payload.stream_options = { include_usage: true };
-  let upstream;
-  try {
-    const headers = Object.assign({ 'Content-Type': 'application/json', Authorization: 'Bearer ' + key }, openCodeHeaders(base, sessionId));
-    const out = await postJsonWithCompat(base + '/chat/completions', headers, payload);
-    if (!out.upstream) return fail(res, 502, `AI 服务返回 ${out.status}`, String(out.text || '').slice(0, 1200));
-    upstream = out.upstream;
-  } catch (err) {
-    return fail(res, 502, '连接 AI 服务失败: ' + err.message);
-  }
-  const ctype = upstream.headers.get('content-type') || '';
-  if (!stream || ctype.includes('application/json')) {
-    const data = await upstream.json();
-    res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
-    const msg = data.choices?.[0]?.message || {};
-    if (msg.reasoning_content) sseWrite(res, { type: 'reasoning', content: msg.reasoning_content });
-    if (msg.content) sseWrite(res, { type: 'delta', content: msg.content });
-    if (msg.tool_calls?.length) sseWrite(res, { type: 'tool_calls', tool_calls: msg.tool_calls });
-    if (data.usage) sseWrite(res, { type: 'usage', usage: data.usage });
-    sseWrite(res, { type: 'done', finish_reason: data.choices?.[0]?.finish_reason || 'stop' });
-    res.end();
-    return;
-  }
-  res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-  const reader = upstream.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  const toolCalls = new Map();
-  let usage = null;
-  let finishReason = null;
-  const handle = (payloadStr) => {
-    if (!payloadStr || payloadStr === '[DONE]') return;
-    let data;
-    try { data = JSON.parse(payloadStr); } catch { return; }
-    if (data.error) { sseWrite(res, { type: 'error', message: data.error.message || JSON.stringify(data.error) }); return; }
-    if (data.usage) usage = data.usage;
-    const choice = data.choices?.[0];
-    if (!choice) return;
-    if (choice.finish_reason) finishReason = choice.finish_reason;
-    const delta = choice.delta || {};
-    if (delta.reasoning_content) sseWrite(res, { type: 'reasoning', content: delta.reasoning_content });
-    if (delta.reasoning) sseWrite(res, { type: 'reasoning', content: delta.reasoning });
-    if (delta.content) sseWrite(res, { type: 'delta', content: delta.content });
-    if (Array.isArray(delta.tool_calls)) {
-      for (const tc of delta.tool_calls) {
-        const idx = tc.index ?? 0;
-        const cur = toolCalls.get(idx) || { id: '', type: 'function', function: { name: '', arguments: '' } };
-        if (tc.id) cur.id = tc.id;
-        if (tc.function?.name) cur.function.name += tc.function.name;
-        if (tc.function?.arguments) cur.function.arguments += tc.function.arguments;
-        toolCalls.set(idx, cur);
-      }
-    }
-  };
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, idx).trim();
-        buf = buf.slice(idx + 1);
-        if (line.startsWith('data:')) handle(line.slice(5).trim());
-      }
-    }
-    if (buf.trim().startsWith('data:')) handle(buf.trim().slice(5).trim());
-  } catch (err) {
-    sseWrite(res, { type: 'error', message: '流读取失败: ' + err.message });
-  }
-  if (toolCalls.size) {
-    const calls = [...toolCalls.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
-    for (const c of calls) if (!c.id) c.id = 'call_' + crypto.randomBytes(6).toString('hex');
-    sseWrite(res, { type: 'tool_calls', tool_calls: calls });
-  }
-  if (usage) sseWrite(res, { type: 'usage', usage });
-  sseWrite(res, { type: 'done', finish_reason: finishReason || (toolCalls.size ? 'tool_calls' : 'stop') });
-  res.end();
-}
-
-function toAnthropicPayload({ model, messages, tools, maxTokens, temperature, toolChoice }) {
-  const system = messages
-    .filter((m) => m.role === 'system')
-    .map((m) => (typeof m.content === 'string' ? m.content : (m.content || []).map((c) => c.text || '').join('\n')))
-    .join('\n\n');
-  const out = [];
-  for (const m of messages) {
-    if (m.role === 'system') continue;
-    if (m.role === 'user') {
-      const content = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : m.content;
-      out.push({ role: 'user', content });
-    } else if (m.role === 'assistant') {
-      const blocks = [];
-      if (m.content) blocks.push({ type: 'text', text: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) });
-      for (const tc of m.tool_calls || []) {
-        let input = {};
-        try { input = JSON.parse(tc.function?.arguments || '{}'); } catch { input = {}; }
-        blocks.push({ type: 'tool_use', id: tc.id, name: tc.function?.name, input });
-      }
-      out.push({ role: 'assistant', content: blocks });
-    } else if (m.role === 'tool') {
-      const block = { type: 'tool_result', tool_use_id: m.tool_call_id, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) };
-      const last = out[out.length - 1];
-      if (last && last.role === 'user' && Array.isArray(last.content) && last.content.every((b) => b.type === 'tool_result')) last.content.push(block);
-      else out.push({ role: 'user', content: [block] });
-    }
-  }
-  const payload = { model, max_tokens: maxTokens, messages: out, stream: true };
-  if (system) payload.system = system;
-  if (temperature != null) payload.temperature = temperature;
-  if (tools.length) {
-    payload.tools = tools.map((t) => ({ name: t.function?.name, description: t.function?.description, input_schema: t.function?.parameters || { type: 'object', properties: {} } }));
-    if (toolChoice) payload.tool_choice = { type: 'tool', name: toolChoice };
-  }
-  return payload;
-}
-
-async function proxyAnthropic({ res, base, key, model, messages, tools, maxTokens, temperature, sessionId, toolChoice }) {
-  let upstream;
-  try {
-    const payload = toAnthropicPayload({ model, messages, tools, maxTokens, temperature, toolChoice });
-    const headers = Object.assign({ 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01', Authorization: 'Bearer ' + key }, openCodeHeaders(base, sessionId));
-    const out = await postJsonWithCompat(base + '/messages', headers, payload);
-    if (!out.upstream) return fail(res, 502, `AI 服务返回 ${out.status}`, String(out.text || '').slice(0, 1200));
-    upstream = out.upstream;
-  } catch (err) {
-    return fail(res, 502, '连接 AI 服务失败: ' + err.message);
-  }
-  res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
-  const reader = upstream.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  let pendingEvent = '';
-  let dataLines = [];
-  const toolBlocks = new Map();
-  let stopReason = null;
-  let inputTokens = 0;
-  let outputTokens = 0;
-
-  const handleEvent = (event, dataStr) => {
-    if (!dataStr) return;
-    let data;
-    try { data = JSON.parse(dataStr); } catch { return; }
-    if (event === 'message_start') {
-      const u = data.message?.usage || {};
-      inputTokens = Number(u.input_tokens || 0);
-      outputTokens = Number(u.output_tokens || 0);
-    } else if (event === 'content_block_start') {
-      const block = data.content_block;
-      if (block?.type === 'tool_use') toolBlocks.set(data.index, { id: block.id, name: block.name, arguments: '' });
-      if (block?.type === 'text' && block.text) sseWrite(res, { type: 'delta', content: block.text });
-      if (block?.type === 'thinking' && block.thinking) sseWrite(res, { type: 'reasoning', content: block.thinking });
-    } else if (event === 'content_block_delta') {
-      const d = data.delta;
-      if (d?.type === 'text_delta') sseWrite(res, { type: 'delta', content: d.text });
-      else if (d?.type === 'thinking_delta') sseWrite(res, { type: 'reasoning', content: d.thinking });
-      else if (d?.type === 'input_json_delta') {
-        const cur = toolBlocks.get(data.index);
-        if (cur) cur.arguments += d.partial_json || '';
-      }
-    } else if (event === 'message_delta') {
-      if (data.delta?.stop_reason) stopReason = data.delta.stop_reason;
-      const u = data.usage || {};
-      if (u.output_tokens != null) outputTokens = Number(u.output_tokens);
-      if (u.input_tokens != null) inputTokens = Number(u.input_tokens);
-    } else if (event === 'error') {
-      sseWrite(res, { type: 'error', message: data.error?.message || JSON.stringify(data.error || data) });
-    }
-  };
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        const rawLine = buf.slice(0, idx);
-        buf = buf.slice(idx + 1);
-        const line = rawLine.replace(/\r$/, '');
-        if (line === '') {
-          if (dataLines.length) handleEvent(pendingEvent, dataLines.join('\n'));
-          pendingEvent = '';
-          dataLines = [];
-          continue;
-        }
-        if (line.startsWith('event:')) pendingEvent = line.slice(6).trim();
-        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
-      }
-    }
-    if (dataLines.length) handleEvent(pendingEvent, dataLines.join('\n'));
-  } catch (err) {
-    sseWrite(res, { type: 'error', message: '流读取失败: ' + err.message });
-  }
-  if (toolBlocks.size) {
-    const calls = [...toolBlocks.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => ({
-      id: v.id || ('call_' + crypto.randomBytes(6).toString('hex')),
-      type: 'function',
-      function: { name: v.name, arguments: v.arguments || '{}' },
-    }));
-    sseWrite(res, { type: 'tool_calls', tool_calls: calls });
-  }
-  if (inputTokens || outputTokens) {
-    sseWrite(res, { type: 'usage', usage: { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens } });
-  }
-  sseWrite(res, { type: 'done', finish_reason: stopReason === 'tool_use' ? 'tool_calls' : (stopReason || (toolBlocks.size ? 'tool_calls' : 'stop')) });
-  res.end();
+  const headers = { 'Content-Type': 'application/json', Authorization: 'Bearer ' + key, ...openCodeHeaders(base, sessionId) };
+  if (wire === 'anthropic') Object.assign(headers, { 'x-api-key': key, 'anthropic-version': '2023-06-01' });
+  return proxyChat({ req, res, wire, headers, base, model, messages, tools, maxTokens, temperature, stream, reasoningEffort, sessionId, toolChoice });
 }
 
 /* ==========================================================================
@@ -1220,7 +1023,7 @@ async function fsList(target) {
     if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === '$RECYCLE.BIN' || e.name === 'System Volume Information') continue;
     const p = path.join(abs, e.name);
     if (e.isDirectory()) dirs.push({ name: e.name, path: p });
-    else if (/\.(html?|htm)$/i.test(e.name)) {
+    else if (/\.(html?|pptx?)$/i.test(e.name)) {
       const st = await fs.stat(p).catch(() => null);
       files.push({ name: e.name, path: p, size: st?.size || 0, mtime: st?.mtimeMs || 0, ext: path.extname(e.name) });
     }
@@ -1338,8 +1141,13 @@ const server = http.createServer(async (req, res) => {
       return ok ? undefined : fail(res, 404, '资源不存在');
     }
     if (pathname.startsWith('/templates/')) {
-      const target = path.join(TEMPLATES_DIR, safeRel(pathname.slice(11)));
-      if (!within(TEMPLATES_DIR, target)) return fail(res, 403, '禁止访问');
+      const [id,...parts]=safeRel(pathname.slice(11)).split('/'),dir=templateLibrary.directory(id),rel=parts.join('/');
+      const target = path.join(dir,rel);
+      if (!within(dir, target)||rel.split('/').some((p)=>p.startsWith('.'))) return fail(res, 403, '禁止访问');
+      if(id.startsWith('custom-')&&rel==='index.html'){
+        const meta=await readJson(path.join(dir,'template.json'),{}),read=async(name)=>name==='project.json'?Buffer.from(JSON.stringify({kind:meta.kind})):fs.readFile(path.join(dir,safeRel(name))).catch(()=>null);
+        const html=await deckDocument({read,shared:sharedDeckFile,base:`/templates/${enc(id)}/`});res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end(html);
+      }
       const ok = await serveStatic(res, target, { noStore: true });
       return ok ? undefined : fail(res, 404, '模板不存在');
     }
@@ -1369,8 +1177,35 @@ const server = http.createServer(async (req, res) => {
       const body = await readJsonBody(req);
       return json(res, 200, await updateSettings(body));
     }
+    // Deliberately separate from the Agent's writable settings API.
+    if (pathname === '/api/image-settings' && method === 'PUT') {
+      const body = await readJsonBody(req, 16000), settings = await getSettings();
+      settings.imageGeneration = updateImageSettings(settings.imageGeneration, body);
+      await writeJson(SETTINGS_FILE, settings);
+      return json(res, 200, { imageGeneration: publicImageSettings(settings.imageGeneration) });
+    }
+    if (pathname === '/api/agent/capabilities' && method === 'GET') return json(res, 200, { operations: API_CATALOG });
+    if (pathname === '/api/workspace/chats' && method === 'GET') return json(res, 200, await listChats(DATA_DIR));
+    if (pathname === '/api/workspace/chat') {
+      const session = url.searchParams.get('session') || 'default';
+      if (method === 'GET') return json(res, 200, await readChat(DATA_DIR, session));
+      if (method === 'PUT') return json(res, 200, await saveChat(DATA_DIR, session, await readJsonBody(req, 80 * 1024 * 1024)));
+    }
     if (pathname === '/api/skills' && method === 'GET') return json(res, 200, { skills: await listSkills() });
     if (pathname === '/api/templates' && method === 'GET') return json(res, 200, { templates: await listTemplates() });
+    if (pathname === '/api/imports' && method === 'POST') {
+      const body=await readJsonBody(req,60*1024*1024),bytes=decodeUpload(body.dataUrl),fileName=String(body.fileName||'');
+      if(!/\.pptx?$/i.test(fileName))throw new Error('只支持暂存 PPT / PPTX 附件');
+      const id='upload-'+crypto.randomUUID(),dir=path.join(DATA_DIR,'imports');await fs.mkdir(dir,{recursive:true});await fs.writeFile(path.join(dir,id+path.extname(fileName).toLowerCase()),bytes);await writeJson(path.join(dir,id+'.json'),{fileName,createdAt:now()});return json(res,200,{importId:id,fileName});
+    }
+    if (pathname === '/api/templates' && method === 'POST') {
+      const body=await readJsonBody(req,60*1024*1024),bytes=body.dataUrl?decodeUpload(body.dataUrl):null;
+      const converted=bytes&&/\.pptx?$/i.test(body.fileName||'')?await convertPowerPoint(bytes,{fileName:body.fileName,name:body.name,mode:body.pptMode||'editable'}):null;
+      const save=()=>templateLibrary.save({...body,bytes,converted,projectDir:body.projectId?projectDir(body.projectId):null});
+      const template=body.projectId?await withProjectLock(projectDir(body.projectId),save):await save();return json(res,200,{template,report:converted?.report});
+    }
+    const templateRoute=/^\/api\/templates\/([^/]+)(\/export)?$/.exec(pathname);
+    if(templateRoute){const id=templateRoute[1];if(templateRoute[2]&&method==='GET'){const data=await templateLibrary.exportZip(id);res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':`attachment; filename*=UTF-8''${enc(id)}.zip`});return res.end(data);}if(method==='PATCH')return json(res,200,{template:await templateLibrary.update(id,await readJsonBody(req))});if(method==='DELETE'){await templateLibrary.remove(id);return json(res,200,{ok:true});}}
     if (pathname === '/api/samples' && method === 'GET') return json(res, 200, { samples: await listSamples() });
     if (pathname === '/api/fs/list' && method === 'GET') return json(res, 200, await fsList(url.searchParams.get('path') || ''));
     if (pathname === '/api/fs/read' && method === 'GET') {
@@ -1403,7 +1238,50 @@ const server = http.createServer(async (req, res) => {
       const id = m[1];
       const sub = m[2] || '';
       const dir = projectDir(id);
+      return await withProjectLock(dir, async () => {
       if (!(await exists(dir))) return fail(res, 404, '工程不存在');
+      await recoverVersionTransaction(dir);
+      if (sub === '/generate-image' && method === 'POST') {
+        const body = await readJsonBody(req, 100000), settings = await getSettings();
+        const controller = new AbortController();
+        const disconnected = () => { if (!res.writableEnded) controller.abort(); };
+        res.on('close', disconnected);
+        try {
+          const result = await generateImage({ config: settings.imageGeneration, body, projectDir: dir, signal: controller.signal,
+            stillEnabled: async () => (await getSettings()).imageGeneration.enabled === true });
+          return json(res, 200, result);
+        } finally { res.off('close', disconnected); }
+      }
+      const delivery=/^\/versions\/([^/]+)\/(preview|present|export|files\/(.+))$/.exec(sub);
+      if(delivery&&method==='GET') {
+        const [,versionId,action,rel]=delivery,read=(name)=>readVersionFile(dir,versionId,name);
+        if(rel) {
+          if(rel.split('/').some((s)=>s.startsWith('.'))||rel==='project.json')return fail(res,403,'文件不可公开访问');
+          const data=await read(rel);if(!data)return fail(res,404,'版本文件不存在');
+          res.writeHead(200,{'Content-Type':MIME[path.extname(rel).toLowerCase()]||'application/octet-stream','Cache-Control':'no-store'});return res.end(data);
+        }
+        const html=await deckDocument({read,shared:sharedDeckFile,base:`/api/projects/${enc(id)}/versions/${enc(versionId)}/files/`,portable:action==='export'});
+        res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store',...(action==='export'?{'Content-Disposition':`attachment; filename*=UTF-8''${enc(id)}.html`}:{})});return res.end(html);
+      }
+      if (sub === '/versions' && method === 'GET') return json(res, 200, { versions: await listVersions(dir) });
+      if (sub === '/versions' && method === 'POST') {
+        const body = await readJsonBody(req, 80 * 1024 * 1024);
+        if (body.conversation) body.conversation.projectId = id;
+        return json(res, 200, { version: await captureVersion(dir, body) });
+      }
+      if (sub === '/versions/detail' && method === 'GET') return json(res, 200, await inspectVersion(dir, url.searchParams.get('versionId')));
+      if (sub === '/versions/restore' && method === 'POST') {
+        const body = await readJsonBody(req);
+        const result = await restoreVersion(dir, body.versionId, { rewindConversation: false });
+        return json(res, 200, { ...result, project: await readProject(id) });
+      }
+      const vm = /^\/versions\/([^/]+)(\/restore)?$/.exec(sub);
+      if (vm && !vm[2] && method === 'GET') return json(res, 200, await inspectVersion(dir, vm[1]));
+      if (vm && vm[2] && method === 'POST') {
+        const body = await readJsonBody(req);
+        const result = await restoreVersion(dir, vm[1], body);
+        return json(res, 200, { ...result, project: await readProject(id) });
+      }
       if (sub === '' && method === 'GET') {
         const project = await readProject(id);
         if (!project) return fail(res, 404, '工程不存在');
@@ -1515,12 +1393,11 @@ const server = http.createServer(async (req, res) => {
         await writeJson(path.join(dir, '.history.json'), data);
         return json(res, 200, { ok: true });
       }
-      if (sub === '/chat' && method === 'GET') return json(res, 200, await readJson(path.join(dir, '.chat.json'), { messages: [], skills: [], updatedAt: 0 }));
+      if (sub === '/chats' && method === 'GET') return json(res, 200, await listChats(dir));
+      if (sub === '/chat' && method === 'GET') return json(res, 200, await readChat(dir, url.searchParams.get('session')));
       if (sub === '/chat' && method === 'PUT') {
         const body = await readJsonBody(req, 80 * 1024 * 1024);
-        const data = { messages: Array.isArray(body.messages) ? body.messages.slice(-200) : [], skills: Array.isArray(body.skills) ? body.skills : [], updatedAt: now() };
-        await writeJson(path.join(dir, '.chat.json'), data);
-        return json(res, 200, { ok: true });
+        return json(res, 200, await saveChat(dir, url.searchParams.get('session'), body));
       }
       if (sub === '/thumb' && method === 'GET') {
         const html = await buildThumbHtml(id, Number(url.searchParams.get('slide') || 0));
@@ -1529,43 +1406,15 @@ const server = http.createServer(async (req, res) => {
         return res.end(html);
       }
       if (sub === '/export' && method === 'GET') {
-        const target = path.join(dir, 'index.html');
-        let html = await fs.readFile(target, 'utf8').catch(() => null);
-        if (!html) return fail(res, 404, '文件不存在');
-        const project = await readProject(id);
-        // 兼容模式：导出自包含（原稿 + 内联补丁应用器 + 内联时间线播放器）
-        if (project && project.kind === 'raw') {
-          const patches = await readRawPatches(id);
-          const timeline = await readRawTimeline(id);
-          let tags = '';
-          if (patches.length) {
-            const applier = await fs.readFile(path.join(EDITOR_DIR, 'raw-patches.js'), 'utf8').catch(() => '');
-            tags += rawPatchTags(patches, applier);
-          }
-          if (timeline) {
-            const player = await fs.readFile(path.join(EDITOR_DIR, 'timeline-player.js'), 'utf8').catch(() => '');
-            tags += rawTimelineTags(timeline, player);
-          }
-          const deckConfig = await readRawDeck(id);
-          const cfgJson = JSON.stringify(deckConfig || {}).replace(/</g, '\\u003c');
-          tags += `<script id="wpx-deck-config" type="application/json">${cfgJson}</script>`;
-          const fxInline = await fs.readFile(path.join(EDITOR_DIR, 'fx-presets.js'), 'utf8').catch(() => '');
-          const webInline = await fs.readFile(path.join(EDITOR_DIR, 'web-runtime.js'), 'utf8').catch(() => '');
-          if (fxInline) tags += `<script>${fxInline.replace(/<\/(script)/gi, '<\\/$1')}</script>`;
-          if (webInline) tags += `<script>${webInline.replace(/<\/(script)/gi, '<\\/$1')}</script>`;
-          const shell = await fs.readFile(path.join(EDITOR_DIR, 'present-shell.js'), 'utf8').catch(() => '');
-          if (shell) tags += `<script>${shell.replace(/<\/(script)/gi, '<\\/$1')}</script>`;
-          if (tags) html = html.includes('</body>') ? html.replace('</body>', tags + '\n</body>') : html + tags;
-        }
-        const name = (project?.name || id).replace(/[\\/:*?"<>|]/g, '_');
-        res.writeHead(200, {
-          'Content-Type': 'text/html; charset=utf-8',
-          'Content-Disposition': `attachment; filename*=UTF-8''${enc(name)}.html`,
-        });
+        const read=(rel)=>fs.readFile(path.join(dir,safeRel(rel))).catch(()=>null);
+        const html=await deckDocument({read,shared:sharedDeckFile,portable:true});
+        const project=await readProject(id),name=(project?.name||id).replace(/[\\/:*?"<>|]/g,'_');
+        res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Content-Disposition':`attachment; filename*=UTF-8''${enc(name)}.html`});
         return res.end(html);
       }
       if (sub === '/reload-runtime' && method === 'POST') { invalidateRuntimeCache(); return json(res, 200, { ok: true }); }
       return fail(res, 404, '未知工程接口: ' + sub);
+      });
     }
 
     return fail(res, 404, 'Not found: ' + pathname);

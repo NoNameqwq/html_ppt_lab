@@ -60,42 +60,37 @@
 - **逐次修改记录**：每次修改自动入历史，可单条撤回、可「回到任意时刻」；自动保存到磁盘（防抖 800ms）
 - 放映（新窗口全屏、`#n` 深链、键盘/点击/滚轮/触摸、进度 HUD）、导出 HTML、打印 / 另存 PDF
 
-### AI Agent（右侧栏，Codex 风格，全高）
-- 右侧栏占满窗口全高（含顶栏区域），打开时左侧界面让出宽度
-- **输入框底部工具条**：模型选择器（能力徽章）+ **思考强度**（自动/低/中/高 → `reasoning_effort`）+ **工作权限**
-  （只读 / 可编辑 / 完全访问，按权限过滤工具：8 / 26 / 32 个）+ **联网开关**（开启后 Agent 可调用 `web_search`）+
-  联网设置（齿轮，独立弹窗）+ 附件 + 发送/停止
-- **输出上限与自动续写**：默认输出预算 **65536（64K）**，高级设置可调（DeepSeek 文档最大 384K）；
-  当 `finish_reason=length` 或流意外结束时自动续写（最多 4 次），不再输出到一半直接停
-- OpenCode Go 的 `x-opencode-session` 会做 ASCII 转义（工程 id 含中文时不再触发 ByteString 错误）
-- 消息区顶部新增「一键收起」按钮：同时折叠/展开所有工具调用卡片与思考过程（Codex 式）
-- **联网搜索**：输入框底部「联网」开关，开启后 Agent 可调用 `web_search` 工具（DeepSeek Search / Tavily，二选一配置）；
-  独立「联网搜索设置」弹窗（服务商 / API Key / Base URL / 结果数 / 测试连接），与 AI 模型设置分开
-- 每个工程独立会话，持久化；流式输出、思考过程折叠、Markdown 渲染、工具调用卡片、token 用量；无提示性小字
-- **39 个内置工具**：读工程/页/元素、改文字/样式/几何、插入文本/图片/形状/HTML、增删复制移动页、
-  设置动画/切换/主题/全局 CSS/JS、自定义转场、时间线、转场叠加、元素点击交互、直接写文件（`file_read/file_write`）
-- **所有 UI 功能都有命令接口**：`app_list_commands` 列出 117 条编辑器命令，`app_run_command` 直接执行任意命令；
-  界面里输入 `/` 打开同一份命令清单
-- **计划清单**：`update_plan` 让 Agent 先列 3–8 步，界面显示勾选进度
-- 系统提示词按「当前工程 / 页面 / 选中元素 / 能力 / 命令目录 / 技能」注入，不再有模式分支
-- 每次工具修改都进入历史，可在工具卡片上一键「撤回」
-- 双 API 预设：**DeepSeek**（`https://api.deepseek.com/v1`）与 **OpenCode Go**（`https://opencode.ai/zen/go/v1`），
-  支持自定义 OpenAI 兼容端点；**一键获取模型**并自动识别能力；Key 只存服务端
-- **AI 设置**：Provider 分页标签（一次一个，内置只填 API Key），Base URL/模型 id 收进「高级」；
-  底部「高级设置」折叠：温度（默认 0.7）、上下文上限（默认 100M tokens）、最大输出、流式、技能管理
-- 新增工具：`deck_set_timeline`（跨页时间线）、`deck_set_transition_fx`（转场叠加）、`deck_set_element_action`（元素点击交互）、`deck_set_deck_flags` 的 `mouseMode`
-- 内置 6 个前端技能（动效设计 / 版式与字体 / 配色 / 演示叙事 / Deck 代码规范 / 图片处理），可在高级设置中开关
-- 系统提示词内置：视觉展示定位（唯一约束是分页呈现）、deck 格式、工具规范、动效目录、设计规范、
-  自定义动效/转场代码示例、工作权限规则、安全边界；欢迎提示为动效向（逐字入场/转场/3D 翻转/粒子描边）
+### AI Agent（全新对话工作台）
+
+- 深浅色与编辑器同步，侧栏可调宽、可充满整个窗口，支持过渡动画与减少动态效果偏好；文件库和编辑器都可以打开。
+- 作品直接在对话中交付，提供版本预览、放映、编辑和 HTML 导出；历史交付使用当轮保存的源码与素材。
+- 对话支持 LaTeX 数学排版与 SVG 图解预览；编辑器「插入」提供公式、SVG 和自动字体入口，保留公式及图解源码供再次编辑。
+- 思考等级独立选择自动 / 低 / 中 / 高；自动字体根据内容风格和本机可用字体选择标题、正文组合。
+- 支持保存当前工程为模板，或导入 HTML / ZIP / PPT 模板；模板可重命名、删除、导出 ZIP 并反复创建新工程。
+- PPTX 可直接解析为网页文字、图片、形状和表格；旧版 PPT 及「外观优先」导入使用本机 Microsoft PowerPoint。原文件和转换报告保留在工程 original/。
+- 正文直接展示 Markdown、列表、表格与代码。一次任务只有一份紧凑操作日志，完成后收成一行；展开可查看参数、返回结果及可撤回的修改。
+- 单一输入区支持图片 / PDF / DOCX / PPTX / 文本附件；Enter 发送，Shift+Enter 换行，生成时 Enter 将补充加入队列。输入 `/` 可查应用命令。
+- 模型、思考强度和权限在输入区切换；搜索和附件收在 `+` 菜单，历史、新对话、设置、技能、外观与导出在顶栏。
+- 对话按工程和会话独立保存，新对话保留旧记录，支持草稿恢复和本机应急备份。原文不再按最后 12 条或 200 条截断。
+- 每轮修改前后保存完整工程版本；消息旁「回退到此处」、回复下方「本轮版本」和顶栏「版本历史」支持恢复及命名保存。回退前自动备份，同步回退对话时保留后续消息为历史分支。
+- 接近模型上下文窗口时，分批整理早期记忆；当前任务和原始记录保留。长附件 / 超大工具结果支持分页读取。PDF 未读取范围会明确显示。
+- 长度上限自动续写最多 24 次，连续连接失败最多重试 3 次，单次任务最多 64 轮工具调用；达到边界保留进度并显示继续入口。
+- 停止保留正文和成功工具结果，续接从未完成处继续。工具参数不完整时不执行修改，错误不会被伪装成成功结束。
+- `app_list_apis` / `app_call_api` 连接网页业务接口，覆盖工程管理、文件 / 素材、时间线 / 配置 / 历史 / 版本、模板 / 技能、模型 / 设置、搜索及预览 / 导出。
+- `app_list_commands` / `app_run_command` 连接编辑器命令；权限在实际调用处检查。保留页面 / 元素 / 动效 / 主题 / 代码等专用工具，增加 `file_patch` 精确补丁与 `tool_result_read` 完整结果读取。
+- 兼容 OpenAI 风格与 Anthropic 流式 / 非流式响应，支持 DeepSeek、OpenCode Go 和自定义端点；API Key 只保存在服务端。
+
+实现与验收说明见 [Agent 工作台](docs/AGENT.md)。
 
 ---
 
 ## 🚀 快速开始
 
-环境：Node.js ≥ 20（无第三方依赖）。
+环境：Node.js ≥ 20。数学渲染、SVG 净化、Office XML 和 ZIP 解析使用本地依赖，无需 CDN。
 
 ```bash
 cd D:\DSHPj\pptweb
+npm install
 node server.mjs
 # → http://127.0.0.1:4321
 ```
@@ -108,7 +103,7 @@ node server.mjs
 1. 点右上角「AI 设置」（或编辑器里 Ctrl+Shift+E 打开 Agent → 未配置模型 → 去设置）。
 2. 选择 **DeepSeek** 或 **OpenCode Go**，粘贴 API Key（也可用环境变量 `DEEPSEEK_API_KEY` / `OPENCODE_GO_API_KEY`）。
 3. 点「一键获取模型」→ 选择默认模型 → 保存。
-4. 回到编辑器打开 Agent（Ctrl+Shift+E），输入需求即可。Agent 支持直接改代码、改版式、加动效，所有修改可撤回。
+4. 回到编辑器打开 Agent（Ctrl+Shift+E），输入需求即可。Agent 支持直接改代码、改版式、加动效；编辑器工具产生的历史操作可撤回。
 
 ---
 
@@ -133,7 +128,8 @@ node server.mjs
 ## 🧱 技术架构
 
 ```
-server.mjs              Node 零依赖 HTTP：静态 + 工程 API + 导入 + 缩略图 + AI 代理（SSE）
+server.mjs              Node HTTP：静态 + 工程 / 模板 API + 导入 + 缩略图
+server/                 模型流代理（SSE）和原子写入会话存储
 editor/
   deck-runtime.js/css   deck 运行时（缩放、翻页切换、转场叠加、动效播放、导入页 CSS/WAAPI 重放、放映 HUD/右键菜单/鼠标模式、编辑/缩略图模式）
   web-runtime.js        网页运行时：预设动画、转场叠加、元素动画预览（不要求模板结构）
@@ -148,13 +144,13 @@ app/                    原生 ES Module 前端（无构建）
   js/library/           文件库、新建、导入、HTML→deck 转换（计时器加速 + 逐页捕获 + WAAPI 快照）
   js/editor/            编辑器编排、bridge 客户端、选择/拖拽、文字、插入、属性、缩略图、历史、
                         动效库、切换、主题、放映、导出
-  js/agent/             Agent 面板、流式循环、31 工具、系统提示词、技能、模型设置、Markdown
+  js/agent/             Agent 工作台、会话运行时、工具与 API 目录、记忆、技能、模型设置、Markdown
   styles/               base tokens + 各模块样式（深浅色、纯色 + 微颗粒质感）
 templates/              4 套新建模板
 skills/                 6 个内置技能（markdown）
 samples/                内置示例原稿（motion-100 / bloom-live）
 projects/               用户工程（运行时生成）
-scripts/                qa.mjs（无头 Chrome E2E）、shots.mjs（视觉截图）、mock-ai.mjs（Agent E2E 用 Mock 模型）
+scripts/                编辑器 QA、Agent 运行时测试、独立浏览器验收、本地 Mock 模型
 docs/SPEC.md            完整架构/接口契约
 docs/shots/             QA 与视觉截图
 ```
@@ -189,8 +185,14 @@ node scripts/qa.mjs
 # 追加：导入转换示例（motion-100 / bloom-live）
 node scripts/qa.mjs --convert
 
-# 追加：Agent 工具调用 E2E（自动起本地 Mock AI，无需真实 API Key）
-node scripts/qa.mjs --agent
+# Agent 运行时回归：SSE、恢复、上下文、权限、持久化
+npm run test:agent
+
+# 数学、字体、PPTX、模板与离线资源回归
+npm run test:authoring
+
+# Agent 浏览器验收：独立服务 / 数据 / Mock 模型，无需真实 API Key
+npm run qa:agent
 
 # 视觉截图（输出到 docs/shots/final-*.png）
 node scripts/shots.mjs
@@ -206,11 +208,22 @@ QA 产物：`docs/shots/qa-report.json`（步骤/耗时/console error）。
 - 多选、组合、图表、视频暂未实现；旋转元素的缩放为近似（松手后自动校正）。
 - 网页切页本身由原稿脚本控制，不能替换成预设切换；需要用「转场」叠加或时间线做效果。
 - 文字编辑中的自动保存会延后到编辑结束；极端关闭浏览器场景可能丢最后一次未落盘修改。
-- Agent 的上下文压缩为截断摘要（不额外调用模型总结）；OpenCode Go 若未点「获取模型」需手动填模型 id。
+- Agent 的理解、规划和执行质量取决于所配置模型；服务不可用或当前任务超过上下文窗口时，会显示原因并保留记录。OpenCode Go 若未点「获取模型」需手动填模型 id。
 - 本工具面向本地单机使用（服务只监听 127.0.0.1，无鉴权）。
+- PPT 可编辑解析不保证复刻全部 Office 特性：复杂图表按缓存数据重绘，SmartArt / OLE / 自定义曲线 / Office 数学对象及动画可能需要调整，具体见导入报告。外观优先将每页变成图片，不能单独编辑原有文字和形状。
 
 ---
 
 ## 📄 License
 
 内部工具 / 示例项目，可自由修改使用。
+
+
+## 页面知识表达与创作增强
+
+- 制作页面支持 LaTeX 公式与 SVG 讲解，保留源码，放映与离线 HTML 导出可用。
+- 内置 Frontend Slides / Anthropic PPTX 改编技能与章节结构技能，提供花瓣、轨道、阶梯动画目录；新增「知识花园」示例模板。
+- Agent 的「+ → 生图设置」可接入图像模型。默认关闭，需手动开启；生成后自动保存为工程素材并放入页面。
+- 元素 / 页面右键 AI 重做先填写要求，确认后发送。
+
+详细说明与来源：[创作能力](docs/CREATION.md)。验证：`npm run test:authoring`、`npm run qa:authoring`。

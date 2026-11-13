@@ -6,6 +6,7 @@
 
 import { h } from '../core/dom.js';
 import { icon } from '../ui/icons.js';
+import {initTemplateLibrary,importTemplate,saveTemplate,manageTemplates} from './templates.js';
 
 /** 模板列表接口不可用时的兜底（与 motion-design 的模板 id 对齐） */
 const FALLBACK_TEMPLATES = [
@@ -19,6 +20,7 @@ let ctx = null;
 
 export async function init(_ctx) {
   ctx = _ctx;
+  initTemplateLibrary(ctx);
   ctx.bus.registerCommand('file.new', () => openNewDialog(), {
     label: '新建演示',
     group: '文件',
@@ -49,17 +51,12 @@ function templateFrame(tpl) {
     title: (tpl.name || tpl.id) + ' 预览',
     tabindex: '-1',
     scrolling: 'no',
+    sandbox: 'allow-scripts',
   });
   frame.addEventListener('load', () => {
-    let failed = false;
-    try {
-      const body = frame.contentDocument && frame.contentDocument.body;
-      const text = body ? (body.textContent || '').trim() : '';
-      if (!body || /^\{\s*"error"/.test(text) || (!body.children.length && !/^\s*</.test(body.innerHTML))) failed = true;
-    } catch { failed = true; }
-    frame.classList.toggle('is-failed', failed);
-    if (!failed) frame.classList.add('is-loaded');
+    frame.classList.add('is-loaded');
   });
+  frame.addEventListener('error',()=>frame.classList.add('is-failed'));
   return frame;
 }
 
@@ -163,6 +160,7 @@ async function openNewDialog() {
   });
 
   const body = h('div', { class: 'tpl-dialog' },
+    h('div',{class:'author-row'},h('button',{class:'btn btn--sm',onClick:async()=>{const r=await importTemplate(ctx);if(r?.template){state.selectedId=r.template.id;await loadTemplates();}}},'导入 / 自定义模板'),h('button',{class:'btn btn--sm',disabled:!ctx.store.get().project,onClick:async()=>{const r=await saveTemplate(ctx);if(r?.template){state.selectedId=r.template.id;await loadTemplates();}}},'保存当前为模板'),h('button',{class:'btn btn--sm',onClick:async()=>{await manageTemplates(ctx);await loadTemplates();}},'管理模板')),
     gallery,
     h('div', { class: 'tpl-divider' }),
     h('div', { class: 'tpl-name-row' },

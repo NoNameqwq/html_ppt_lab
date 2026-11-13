@@ -34,6 +34,9 @@ let saveDebounced = null;
 let historyDebounced = null;
 let savingPromise = null;
 let saveQueued = false;
+let historySaves = Promise.resolve();
+let versionBusy = false;
+let versionActionActive = false;
 let historyDirty = false;
 let restoringHistory = false;
 let lastSavedAt = 0;
@@ -80,6 +83,8 @@ const editorApi = {
   recordOp(op) { recordOp(op); },
   markDirty() { markDirty(); },
   saveNow(opts) { return saveNow(opts); },
+  withVersionCheckpoint(action) { return versionAction(action, false); },
+  restoreVersion(action) { return versionAction(action, true); },
   toast,
 };
 
@@ -357,6 +362,7 @@ function onBridgeChange(data) {
 }
 
 function recordOp(op) {
+  if (versionBusy) return;
   if (!op || typeof op.type !== 'string') return;
   if (suppressChange > 0) return;
   if (op.opId && recentOpIds.includes(op.opId)) return;
@@ -485,6 +491,7 @@ function syncAll() {
 /* ================= 保存 / 历史 ================= */
 
 function markDirty() {
+  if (versionBusy) return;
   dirty = true;
   if (store.get().ui.saving !== 'dirty') setSaving('dirty');
   bus.emit('project:dirty', { dirty: true });
@@ -536,6 +543,7 @@ async function putRawPatches(projectId, patches) {
 }
 
 async function saveNow(options = {}) {
+  if (versionBusy) return { ok: false, error: '正在处理工程版本，请稍候' };
   if (!project || !bridge?.ready) {
     if (options.toast) toast('画布尚未就绪，无法保存');
     return { ok: false, error: '未打开工程' };
@@ -600,7 +608,12 @@ async function saveNow(options = {}) {
   return savingPromise;
 }
 
-async function persistHistory() {
+function persistHistory() {
+  if (versionBusy) return historySaves;
+  historySaves = historySaves.catch(() => {}).then(() => writeHistory());
+  return historySaves;
+}
+async function writeHistory() {
   if (!project) return;
   const projectId = project.id;
   // 只持久化「已应用」的 op：磁盘上的 deck 是当前状态，历史记录必须与之一致（撤销后重开不会出现幽灵可重做项）
@@ -627,6 +640,7 @@ function scheduleHistorySave() {
 }
 
 function flushHistoryKeepalive() {
+  if (versionBusy) return;
   if (!project) return;
   const history = store.get().history;
   const ops = history.ops.slice(0, history.cursor);
@@ -707,10 +721,10 @@ async function goSlide(index) {
   return { ok: true, index: n };
 }
 
-async function reloadDeck() {
+async function reloadDeck({ fromVersion = false } = {}) {
   if (!project) return { ok: false };
   const projectId = project.id;
-  if (dirty) {
+  if (dirty && !fromVersion) {
     const saved = await saveNow({ reason: 'reload' });
     if (!saved.ok) {
       toast.error('有未保存的修改，重新加载已取消');
@@ -720,7 +734,12 @@ async function reloadDeck() {
   const token = ++bootToken;
   unbindBridgeEvents();
   if (bridge) { bridge.destroy(); bridge = null; }
-  if (historyDirty) await persistHistory();
+  if (historyDirty && !fromVersion) await persistHistory();
+  if (fromVersion) {
+    dirty = false; historyDirty = false; saveQueued = false; recentOpIds = []; rawBasePatches = [];
+    const data = await api.getProject(projectId);
+    project = data.project; store.update((s) => { s.project = project; });
+  }
   bridge = new BridgeClient(host.frame, { timeout: 8000 });
   bindBridgeEvents();
   setLoading(true, '正在重新加载画布…');
@@ -729,6 +748,21 @@ async function reloadDeck() {
     if (token !== bootToken) return { ok: false };
     const state = readyData?.state || (await bridge.getState());
     applyDeckState(state, readyData?.mode);
+    if (fromVersion) {
+      if (store.get().deck.raw) {
+        const patches = await bridge.call('getRawPatches');
+        rawBasePatches = Array.isArray(patches?.patches) ? patches.patches : [];
+        store.setHistory([], 0);
+      } else {
+        const history = await api.getHistory(projectId);
+        const ops = Array.isArray(history.ops) ? history.ops : [];
+        store.setHistory(ops, ops.length);
+      }
+      lastHistorySig = `${store.get().history.ops.length}:${store.get().history.cursor}`;
+      setSaving('saved', Date.now());
+      bus.emit('project:renamed', project);
+      bus.emit('history:change', store.get().history);
+    }
     store.update((s) => { s.deck.ready = true; s.selection = null; });
     setLoading(false);
     host.root.classList.add('is-loaded');
@@ -743,6 +777,45 @@ async function reloadDeck() {
     toast.error('重新加载失败：' + (err?.message || err));
     return { ok: false, error: err?.message || String(err) };
   }
+}
+
+async function versionAction(action, reload) {
+  if (versionActionActive) throw new Error('正在处理工程版本，请稍候');
+  if (!project || !bridge?.ready) throw new Error('请等待工程画布加载完成');
+  versionActionActive = true;
+  const root = host.root, wasInert = root.inert;
+  root.inert = true;
+  try {
+    // Drain queued saves, including writes that were already in flight when the user clicked.
+    saveDebounced?.cancel(); historyDebounced?.cancel();
+    while (savingPromise) {
+      const saved = await savingPromise;
+      if (saved?.ok === false) throw new Error(saved.error || '保存工程失败');
+    }
+    if (dirty) {
+      const saved = await saveNow({ reason: 'version' });
+      if (saved?.ok === false) throw new Error(saved.error || '保存工程失败');
+      while (savingPromise) {
+        const queued = await savingPromise;
+        if (queued?.ok === false) throw new Error(queued.error || '保存工程失败');
+      }
+    }
+    await historySaves;
+    if (historyDirty) await flushHistory();
+    await historySaves;
+    if (historyDirty) throw new Error('修改历史尚未保存，版本操作已取消');
+    saveDebounced?.cancel(); historyDebounced?.cancel();
+    versionBusy = true;
+    const result = await action();
+    if (reload) {
+      restoringHistory = true;
+      try {
+        const loaded = await reloadDeck({ fromVersion: true });
+        if (!loaded?.ok) result.editorError = '版本已恢复到磁盘，画布加载失败，请刷新页面。' + (loaded?.error || '');
+      } catch (e) { result.editorError = '版本已恢复到磁盘，请刷新画布：' + e.message; }
+    }
+    return result;
+  } finally { versionBusy = false; versionActionActive = false; restoringHistory = false; root.inert = wasInert; }
 }
 
 /* ================= 布局 / 坐标 ================= */
@@ -954,7 +1027,7 @@ function onStoreChange(state) {
   if (sig !== lastHistorySig) {
     lastHistorySig = sig;
     bus.emit('history:change', { ops: history.ops, cursor: history.cursor });
-    if (!restoringHistory && project) scheduleHistorySave();
+    if (!restoringHistory && !versionBusy && project) scheduleHistorySave();
   }
 
   const ui = state.ui;
@@ -1020,6 +1093,7 @@ function setupExitFlush() {
 
 function wrapCommand(fn) {
   return async (payload) => {
+    if (versionBusy) return { ok: false, error: '正在处理工程版本，请稍候' };
     try {
       return await fn(payload);
     } catch (err) {

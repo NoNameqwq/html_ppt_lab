@@ -1,0 +1,439 @@
+/* Model and skill configuration dialogs, independent of conversation UI. */
+/* ---------- 技能管理弹窗（ask-*，设置高级区入口） ---------- */
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0 2px;
+  font-size: 14px;
+}
+
+.ask-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.ask-intro svg { color: var(--accent); margin-top: 1px; }
+
+.ask-group { display: flex; flex-direction: column; gap: 4px; }
+
+.ask-group-title {
+  font-size: 10.5px;
+  letter-spacing: .7px;
+  color: var(--muted);
+  padding: 2px 2px 4px;
+  text-transform: uppercase;
+}
+
+.ask-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  cursor: pointer;
+  transition: background var(--dur-1), border-color var(--dur-1);
+}
+
+.ask-row:hover { background: var(--surface-2); border-color: var(--line-strong); }
+
+.ask-row-main { flex: 1; min-width: 0; }
+
+.ask-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.ask-row-name { font-size: 13.5px; font-weight: 600; }
+.ask-row-desc { font-size: 12px; line-height: 1.5; color: var(--muted); }
+
+/* ---------- AI 设置弹窗 ---------- */
+.ais {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 2px 0;
+  font-size: 14px;
+}
+
+.ais-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ais-tabs::-webkit-scrollbar { display: none; }
+
+.ais-tab {
+  flex: none;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px 8px 0 0;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  color: var(--muted);
+  font-size: 13.5px;
+  margin-bottom: -3px;
+  position: relative;
+  transition: color var(--dur-1), background var(--dur-1);
+}
+
+.ais-tab:hover { color: var(--ink); background: var(--surface-2); }
+
+.ais-tab.is-on {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--line);
+  font-weight: 600;
+}
+
+.ais-tab.is-on::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.ais-tab.is-missing::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  margin-right: 5px;
+  vertical-align: middle;
+}
+
+.ais-tab-add {
+  width: 30px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.ais-tab-add:hover { color: var(--ink); }
+
+.ais-pane {
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 6px 2px 2px;
+}
+
+.ais-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ais-field--row {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.ais-field--row .ais-label {
+  width: 74px;
+  flex: none;
+  font-size: 13px;
+}
+
+.ais-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.ais-label {
+  font-size: 12.5px;
+  color: var(--muted);
+  letter-spacing: .2px;
+}
+
+.ais-field .input,
+.ais-pane .input {
+  height: 32px;
+  font-size: 13.5px;
+}
+
+.ais-key-input {
+  font-family: var(--ui-mono);
+}
+
+.ais-subline {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  padding-left: 84px;
+}
+
+.ais-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+
+.ais-actions .btn {
+  height: 28px;
+  font-size: 12.5px;
+  padding: 0 10px;
+}
+
+.ais-model-picked {
+  font-size: 12px;
+  color: var(--ink-2);
+  font-family: var(--ui-mono);
+  max-width: 46%;
+}
+
+.ais-status {
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-2);
+  word-break: break-word;
+}
+
+.ais-status--ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 30%, var(--line));
+  background: color-mix(in srgb, var(--ok) 8%, var(--surface));
+}
+
+.ais-status--error {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 32%, var(--line));
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
+.ais-status--warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 30%, var(--line));
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+}
+
+.ais-status--loading {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  animation: agentPulse 1.4s var(--ease-in-out) infinite;
+}
+
+.ais-models {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 7px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 1px;
+}
+
+.ais-model {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  text-align: left;
+  transition: border-color var(--dur-1), background var(--dur-1);
+}
+
+.ais-model:hover { background: var(--surface-3); border-color: var(--line-strong); }
+
+.ais-model.is-on {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.ais-model-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ais-model-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ais-model-id {
+  font-family: var(--ui-mono);
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ais-model-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.ais-empty {
+  padding: 10px;
+  border-radius: 7px;
+  border: 1px dashed var(--line);
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ais-adv,
+.ais-more {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+
+.ais-adv > summary,
+.ais-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  list-style: none;
+  user-select: none;
+}
+
+.ais-adv > summary::-webkit-details-marker,
+.ais-more > summary::-webkit-details-marker { display: none; }
+
+.ais-adv > summary::after,
+.ais-more > summary::after {
+  content: "";
+  margin-left: auto;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg) translateY(-1px);
+  transition: transform var(--dur-2) var(--ease-out);
+}
+
+.ais-adv[open] > summary::after,
+.ais-more[open] > summary::after {
+  transform: rotate(-135deg) translateY(-1px);
+}
+
+.ais-adv-body,
+.ais-more-body {
+  border-top: 1px solid var(--line);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  background: var(--surface);
+  border-radius: 0 0 9px 9px;
+}
+
+.ais-adv-tools {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ais-select { width: 140px; height: 32px; }
+
+.ais-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--accent);
+  width: fit-content;
+}
+
+.ais-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+
+.ais-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.ais-row-label {
+  flex: none;
+  width: 108px;
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.ais-row-hint {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: var(--ui-mono);
+}
+
+.ais-range {
+  flex: 0 0 130px;
+  accent-color: var(--accent);
+  height: 4px;
+}
+
+.ais-value {
+  font-family: var(--ui-mono);
+  font-size: 11.5px;
+  color: var(--accent);
+  min-width: 34px;
+}
+
+.ais-num {
+  width: 112px;
+  height: 28px;
+  font-size: 12.5px;
+  font-family: var(--ui-mono);
+  margin-left: auto;
+}
+
+.ais-more-summary {
+  font-weight: 550;
+}
+
+.ais-dialog .modal-body {
+  padding-top: 6px;
+}

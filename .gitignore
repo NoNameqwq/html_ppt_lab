@@ -10,6 +10,8 @@ node_modules/
 
 # 截图与验收产物
 docs/shots/
+output/
+.playwright-cli/
 
 # 系统文件
 .DS_Store

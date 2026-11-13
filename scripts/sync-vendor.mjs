@@ -1,0 +1,10 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const copy = async (from, to) => { await fs.mkdir(path.dirname(path.join(root, to)), { recursive: true }); await fs.copyFile(path.join(root, from), path.join(root, to)); };
+for (const name of ['katex.mjs', 'katex.min.css']) await copy('node_modules/katex/dist/' + name, 'app/vendor/katex/' + name);
+await fs.cp(path.join(root, 'node_modules/katex/dist/fonts'), path.join(root, 'app/vendor/katex/fonts'), { recursive: true });
+await copy('node_modules/katex/LICENSE', 'app/vendor/katex/LICENSE');
+await copy('node_modules/dompurify/dist/purify.es.mjs', 'app/vendor/dompurify.mjs');
+await copy('node_modules/dompurify/LICENSE', 'app/vendor/DOMPurify-LICENSE');

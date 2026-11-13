@@ -1574,8 +1574,17 @@
     var before = slide.outerHTML;
     var tmp = document.createElement('div');
     tmp.innerHTML = String(params.html || '');
-    var next = tmp.firstElementChild;
-    if (!next) throw new Error('HTML 无效');
+    var next = tmp.querySelector(':scope > section.wpx-slide');
+    if (!next) {
+      if (!tmp.innerHTML.trim()) throw new Error('HTML 无效');
+      // Tools may provide canvas contents (including a leading <style>). Keep
+      // the slide shell and stable ID instead of replacing it with that style.
+      next = slide.cloneNode(false);
+      var originalCanvas = canvasOf(slide);
+      var newCanvas = originalCanvas ? originalCanvas.cloneNode(false) : document.createElement('div');
+      newCanvas.classList.add('wpx-canvas'); newCanvas.innerHTML = tmp.innerHTML;
+      next.appendChild(newCanvas);
+    }
     if (!next.dataset.id) next.dataset.id = slide.dataset.id || ('s' + index);
     slide.replaceWith(next);
     refreshRuntime();

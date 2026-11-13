@@ -5,8 +5,7 @@
    - DOCX / PPTX：浏览器原生 DecompressionStream 解 zip 后抽文字
    ========================================================================== */
 
-export const ACCEPT = 'image/*,.pdf,.docx,.pptx,.txt,.md,.csv,.json';
-const MAX_TEXT_PER_FILE = 24000;
+export const ACCEPT = 'image/*,.pdf,.docx,.ppt,.pptx,.txt,.md,.csv,.json';
 const MAX_PDF_PAGES = 30;
 const MAX_SCAN_IMAGES = 4;
 
@@ -71,19 +70,22 @@ async function unzipText(buf, wanted) {
   }
   if (eocd < 0) throw new Error('不是有效的 Office 文档');
   const count = dv.getUint16(eocd + 10, true);
+  if(count>10000)throw new Error('Office 文件条目过多');
   const cdOffset = dv.getUint32(eocd + 16, true);
-  let p = cdOffset;
+  let p = cdOffset, expanded=0;
   const result = {};
   for (let i = 0; i < count; i += 1) {
     if (dv.getUint32(p, true) !== 0x02014b50) break;
     const method = dv.getUint16(p + 10, true);
     const compSize = dv.getUint32(p + 20, true);
+    const expandedSize=dv.getUint32(p+24,true);
     const nameLen = dv.getUint16(p + 28, true);
     const extraLen = dv.getUint16(p + 30, true);
     const commentLen = dv.getUint16(p + 32, true);
     const localOff = dv.getUint32(p + 42, true);
     const name = new TextDecoder().decode(u8.slice(p + 46, p + 46 + nameLen));
     if (wanted(name)) {
+      expanded+=expandedSize;if(expandedSize>12*1024*1024||expanded>120*1024*1024)throw new Error('Office 文本展开内容过大，请拆分后导入');
       const lnLen = dv.getUint16(localOff + 26, true);
       const leLen = dv.getUint16(localOff + 28, true);
       const start = localOff + 30 + lnLen + leLen;
@@ -103,8 +105,10 @@ async function readDocx(file) {
 }
 
 async function readPptx(file) {
-  const entries = await unzipText(await file.arrayBuffer(), (n) => /^ppt\/slides\/slide\d+\.xml$/.test(n));
-  const names = Object.keys(entries).sort((a, b) => Number((a.match(/(\d+)/) || [0, 0])[1]) - Number((b.match(/(\d+)/) || [0, 0])[1]));
+  const entries = await unzipText(await file.arrayBuffer(), (n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)||['ppt/presentation.xml','ppt/_rels/presentation.xml.rels'].includes(n));
+  const parse=(source)=>new DOMParser().parseFromString(source||'','text/xml'),presentation=parse(entries['ppt/presentation.xml']),relationships=parse(entries['ppt/_rels/presentation.xml.rels']);
+  const targets=new Map([...relationships.getElementsByTagNameNS('*','Relationship')].filter((r)=>r.getAttribute('TargetMode')!=='External').map((r)=>[r.getAttribute('Id'),new URL(r.getAttribute('Target'),'https://ppt.local/ppt/').pathname.slice(1)]));
+  const names=[...presentation.getElementsByTagNameNS('*','sldId')].map((n)=>targets.get(n.getAttribute('r:id'))).filter((n)=>entries[n]);
   if (!names.length) throw new Error('PPTX 里没有幻灯片文本');
   const pages = names.map((n, i) => '[第 ' + (i + 1) + ' 页] ' + xmlToText(entries[n])).filter((t) => t.replace(/\[第 \d+ 页\]/, '').trim());
   return { text: pages.join('\n\n'), pages: names.length };
@@ -142,6 +146,7 @@ async function readPdf(file) {
   const limit = Math.min(total, MAX_PDF_PAGES);
   const parts = [];
   const scans = [];
+  let skippedScans = 0;
   for (let i = 1; i <= limit; i += 1) {
     const page = await doc.getPage(i);
     const content = await page.getTextContent();
@@ -152,10 +157,11 @@ async function readPdf(file) {
       /* 扫描页：没有文字层，渲染成图片交给视觉模型 */
       scans.push(await renderPage(page));
       parts.push('[第 ' + i + ' 页] （扫描页，已转为图片）');
-    }
+    } else { skippedScans++; parts.push('[第 ' + i + ' 页] （扫描页，本次未读取）'); }
   }
   try { doc.destroy(); } catch { /* ignore */ }
-  return { text: parts.join('\n\n'), pages: total, images: scans, truncated: total > limit };
+  return { text: parts.join('\n\n'), pages: total, pagesRead: limit, images: scans, truncated: total > limit || skippedScans > 0,
+    warning: [total > limit ? `本次读取前 ${limit}/${total} 页` : '', skippedScans ? `${skippedScans} 张扫描页未读取` : ''].filter(Boolean).join('；') };
 }
 
 /* ---------- 入口 ---------- */
@@ -164,21 +170,22 @@ export async function extractFile(file) {
   const ext = fileExt(file.name);
   const base = { name: file.name, size: file.size, ext, kindLabel: fileKindLabel(ext) };
   try {
+    if(ext==='ppt')return {...base,kind:'doc',text:'旧版 PowerPoint 文件，可通过 projects.import 解析为 HTML。'};
     if (ext === 'pdf') {
       const r = await readPdf(file);
-      return { ...base, kind: 'doc', text: r.text.slice(0, MAX_TEXT_PER_FILE), pages: r.pages, images: r.images || [], scanned: (r.images || []).length, truncated: r.truncated || r.text.length > MAX_TEXT_PER_FILE };
+      return { ...base, kind: 'doc', ...r, scanned: (r.images || []).length };
     }
     if (ext === 'docx') {
       const r = await readDocx(file);
-      return { ...base, kind: 'doc', text: r.text.slice(0, MAX_TEXT_PER_FILE), truncated: r.text.length > MAX_TEXT_PER_FILE };
+      return { ...base, kind: 'doc', text: r.text };
     }
     if (ext === 'pptx') {
       const r = await readPptx(file);
-      return { ...base, kind: 'doc', text: r.text.slice(0, MAX_TEXT_PER_FILE), pages: r.pages, truncated: r.text.length > MAX_TEXT_PER_FILE };
+      return { ...base, kind: 'doc', text: r.text, pages: r.pages };
     }
     if (['txt', 'md', 'csv', 'json'].includes(ext) || (file.type || '').startsWith('text/')) {
       const text = await file.text();
-      return { ...base, kind: 'doc', text: text.slice(0, MAX_TEXT_PER_FILE), truncated: text.length > MAX_TEXT_PER_FILE };
+      return { ...base, kind: 'doc', text };
     }
     if (ext === 'doc') throw new Error('旧版 .doc 暂不支持，请另存为 .docx 或 PDF');
     throw new Error('不支持的文件类型：' + (ext || file.type || '未知'));

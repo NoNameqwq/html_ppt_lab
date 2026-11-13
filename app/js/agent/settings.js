@@ -187,7 +187,7 @@ export async function loadSettings(ctx, opts = {}) {
       const ui = data && typeof data.ui === 'object' && data.ui ? data.ui : {};
       const agent = data && typeof data.agent === 'object' && data.agent ? data.agent : {};
       ctx.store.update((s) => {
-        s.settings = { ...s.settings, providers, ui, agent, loaded: true, error: null };
+        s.settings = { ...s.settings, providers, ui, agent, imageGeneration: data.imageGeneration || { enabled: false }, loaded: true, error: null };
       });
     } catch (err) {
       console.warn('[agent/settings] 读取设置失败（服务端可能未就绪）', err);

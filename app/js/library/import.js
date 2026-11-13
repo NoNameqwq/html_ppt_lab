@@ -4,10 +4,10 @@
    - 默认立即调用 file.convert 命令，转换为可编辑原生 deck（进度/报告由 convert.js 负责）
    ========================================================================== */
 
-import { h, formatBytes, formatTime, readFileAsText } from '../core/dom.js';
+import { h, formatBytes, formatTime, readFileAsText, readFileAsDataURL } from '../core/dom.js';
 import { icon } from '../ui/icons.js';
 
-const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 40 * 1024 * 1024;
 
 let ctx = null;
 
@@ -17,7 +17,7 @@ export async function init(_ctx) {
     if (payload && payload.sampleId) return importSampleDirect(payload);
     return openImportDialog();
   }, {
-    label: '导入网页',
+    label: '导入网页 / PowerPoint',
     group: '文件',
     icon: 'import',
     shortcut: '',
@@ -75,12 +75,14 @@ async function openImportDialog() {
     tabBar.appendChild(btn);
   }
 
+  const pptMode=h('select',{class:'input','aria-label':'PowerPoint 解析方式'},h('option',{value:'editable'},'可编辑解析 · 文字、图片、形状、表格'),h('option',{value:'faithful'},'外观优先 · 使用本机 PowerPoint 生成每页图片'));
   const body = h('div', { class: 'imp-dialog' },
     tabBar,
     h('div', { class: 'imp-panels' },
       panels.upload,
       panels.path,
       panels.samples),
+    h('div',{class:'author-fields'},h('label',{},'PowerPoint 解析方式',pptMode),h('small',{class:'author-hint'},'PPTX 可直接解析；旧版 PPT 与外观优先模式需要安装 Microsoft PowerPoint，并关闭已打开的 PowerPoint 窗口。')),
     h('div', { class: 'imp-divider' }),
     h('div', { class: 'imp-tip' }, ic('info', 14), h('span', null, '导入后直接编辑网页：原稿结构、脚本与动效全部保留，文字 / 样式 / 动效 / 时间线 / 交互都能改。')));
 
@@ -111,8 +113,8 @@ async function openImportDialog() {
   switchTab('upload');
 
   const openPromise = ctx.dialog.open({
-    title: '导入网页',
-    sub: '上传 HTML、浏览本机路径或导入示例；默认保留原动效',
+    title: '导入网页 / PowerPoint',
+    sub: '支持 HTML、PPT、PPTX，也可以浏览本机路径或导入示例',
     width: 'lg',
     body,
     className: 'dialog--import',
@@ -132,6 +134,7 @@ async function openImportDialog() {
             else ctx.toast.warn('请先选择一个示例');
             return false;
           }
+          payload.pptMode=pptMode.value;
           state.busy = true;
           setBusy(modal, true, '导入中…');
           syncImportButton();
@@ -139,6 +142,7 @@ async function openImportDialog() {
             const res = await ctx.api.importProject(payload);
             const project = res?.project;
             if (!project?.id) throw new Error('服务端未返回工程信息');
+            if(project.importReport)await ctx.dialog.open({title:'PowerPoint 导入报告',width:'lg',body:h('div',{class:'author-report'},h('p',{},`已解析 ${project.importReport.slides} 页，文字 ${project.importReport.texts||0} 处，图片 ${project.importReport.images||0} 张，表格 ${project.importReport.tables||0} 个。原文件已保留。`),project.importReport.warnings.length?project.importReport.warnings.map((w)=>h('p',{},w)):h('p',{},'转换完成，可在编辑器中继续检查排版。'))});
             ctx.toast.ok(`已导入「${project.name}」`);
             return { project, mode: state.mode };
           } catch (err) {
@@ -168,6 +172,7 @@ async function openImportDialog() {
   }
   pathPanel.dispose?.();
   ctx.bus.emit('library:refresh', { projectId: result.project.id });
+  if(result.project.kind==='native'){ctx.navigate('#/p/'+encodeURIComponent(result.project.id));return {ok:true,project:result.project};}
   if (result.mode === 'convert') {
     const conv = await ctx.bus.runCommand('file.convert', { project: result.project });
     return { ok: true, project: result.project, mode: 'convert', converted: conv?.ok === true, convert: conv };
@@ -244,7 +249,7 @@ function buildModeSelector(state) {
 function collectImportPayload(state) {
   if (state.tab === 'upload') {
     if (!state.file) return null;
-    return { fileName: state.file.name, content: state.file.content, mode: state.mode };
+    return { fileName: state.file.name, content: state.file.content, dataUrl:state.file.dataUrl, mode: state.mode };
   }
   if (state.tab === 'path') {
     if (!state.pathFile) return null;
@@ -297,7 +302,7 @@ async function importSampleDirect(payload) {
 function buildUploadPanel(state, onChange) {
   const input = h('input', {
     type: 'file',
-    accept: '.html,.htm,text/html',
+    accept: '.html,.htm,.ppt,.pptx,text/html',
     class: 'imp-file-input',
     tabindex: '-1',
     'aria-hidden': 'true',
@@ -307,11 +312,11 @@ function buildUploadPanel(state, onChange) {
     class: 'imp-drop',
     role: 'button',
     tabindex: '0',
-    'aria-label': '选择或拖放 HTML 文件',
+    'aria-label': '选择或拖放 HTML / PowerPoint 文件',
   },
   h('span', { class: 'imp-drop-icon', html: icon('upload', 26) }),
-  h('div', { class: 'imp-drop-title' }, '把 HTML 文件拖到这里'),
-  h('div', { class: 'imp-drop-sub' }, '或点击选择文件 · 支持 .html / .htm · 最大 20MB'));
+  h('div', { class: 'imp-drop-title' }, '把 HTML 或 PowerPoint 文件拖到这里'),
+  h('div', { class: 'imp-drop-sub' }, '或点击选择文件 · HTML / PPT / PPTX · 最大 40MB'));
 
   function renderChip() {
     chip.replaceChildren();
@@ -340,16 +345,17 @@ function buildUploadPanel(state, onChange) {
 
   async function acceptFile(file) {
     if (!file) return false;
-    if (!/\.html?$/i.test(file.name) && file.type !== 'text/html') {
-      ctx.toast.warn('只支持导入 HTML 文件（.html / .htm）');
+    if (!/\.(html?|pptx?)$/i.test(file.name) && file.type !== 'text/html') {
+      ctx.toast.warn('支持 HTML、PPT 与 PPTX 文件');
       return false;
     }
     if (file.size > MAX_UPLOAD_BYTES) {
-      ctx.toast.error('文件过大（' + formatBytes(file.size) + '），最大支持 20MB');
+      ctx.toast.error('文件过大（' + formatBytes(file.size) + '），最大支持 40MB');
       return false;
     }
     zone.classList.add('is-reading');
     try {
+      if(/\.pptx?$/i.test(file.name)){state.file={name:file.name,dataUrl:await readFileAsDataURL(file),size:file.size};renderChip();onChange();return true;}
       const content = await readFileAsText(file);
       if (!content || !/<[a-z!]/i.test(content)) {
         ctx.toast.error('这个文件看起来不是 HTML');

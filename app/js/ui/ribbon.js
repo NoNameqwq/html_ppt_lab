@@ -815,8 +815,8 @@ function renderInsert(container) {
     makeButton({ icon: 'palette', label: '设计', big: true, tip: '打开设计标签', onClick: () => setActiveTab('design') }),
     makeButton({ icon: 'film', label: '切换', big: true, tip: '打开切换标签', onClick: () => setActiveTab('transitions') }),
   );
-
-  container.append(textGroup, mediaGroup, shapeGroup, slideGroup, designGroup, buildTailGroup());
+  const knowledgeGroup=group('知识表达',makeButton({icon:'list',label:'动画目录',big:true,tip:'设计可跳转的章节目录',cmd:'insert.navigation'}),makeButton({icon:'code',label:'公式',big:true,tip:'插入 LaTeX 公式',cmd:'insert.math'}),makeButton({icon:'shapes',label:'SVG 图解',big:true,tip:'插入矢量知识图解',cmd:'insert.svg'}),makeButton({icon:'type',label:'自动字体',big:true,tip:'按内容和本机字体选择组合',cmd:'design.autoFonts'}));
+  container.append(textGroup, knowledgeGroup, mediaGroup, shapeGroup, slideGroup, designGroup, buildTailGroup());
 }
 
 /* ============================================================

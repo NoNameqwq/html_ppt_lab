@@ -1,0 +1,13 @@
+{
+  "id": "knowledge-garden",
+  "name": "知识花园",
+  "desc": "叶片展开目录与章节放大过渡，页面内含可编辑 LaTeX 公式、SVG 图解和连贯讲解。",
+  "theme": "garden",
+  "slides": 8,
+  "order": 25,
+  "cover": {
+    "bg": "#14251e",
+    "fg": "#ecf0e5",
+    "accent": "#bed6a7"
+  }
+}

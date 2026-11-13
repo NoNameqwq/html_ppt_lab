@@ -1,4 +1,5 @@
 /* 服务端 API 客户端 */
+import { readSSE } from './sse.js';
 
 export class ApiError extends Error {
   constructor(message, status, payload) {
@@ -62,8 +63,13 @@ export const api = {
   /* ---------- 历史 / 会话 ---------- */
   getHistory: (id) => request('/api/projects/' + enc(id) + '/history'),
   putHistory: (id, ops) => request('/api/projects/' + enc(id) + '/history', { method: 'PUT', body: { ops } }),
-  getChat: (id) => request('/api/projects/' + enc(id) + '/chat'),
-  putChat: (id, payload) => request('/api/projects/' + enc(id) + '/chat', { method: 'PUT', body: payload }),
+  getChat: (id, session = 'default') => request((id ? '/api/projects/' + enc(id) : '/api/workspace') + '/chat?session=' + enc(session)),
+  putChat: (id, payload, session = 'default') => request((id ? '/api/projects/' + enc(id) : '/api/workspace') + '/chat?session=' + enc(session), { method: 'PUT', body: payload }),
+  listChats: (id) => request((id ? '/api/projects/' + enc(id) : '/api/workspace') + '/chats'),
+  listVersions: (id) => request('/api/projects/' + enc(id) + '/versions'),
+  createVersion: (id, body) => request('/api/projects/' + enc(id) + '/versions', { method: 'POST', body }),
+  inspectVersion: (id, version) => request('/api/projects/' + enc(id) + '/versions/' + enc(version)),
+  restoreVersion: (id, version, body = {}) => request('/api/projects/' + enc(id) + '/versions/' + enc(version) + '/restore', { method: 'POST', body }),
 
   /* ---------- 设置 / AI ---------- */
   getSettings: () => request('/api/settings'),
@@ -71,6 +77,10 @@ export const api = {
   fetchModels: (payload) => request('/api/ai/models', { method: 'POST', body: payload }),
   skills: () => request('/api/skills'),
   templates: () => request('/api/templates'),
+  saveTemplate: (body) => request('/api/templates',{method:'POST',body}),
+  updateTemplate: (id,body) => request('/api/templates/'+enc(id),{method:'PATCH',body}),
+  deleteTemplate: (id) => request('/api/templates/'+enc(id),{method:'DELETE'}),
+  stageImport: (body) => request('/api/imports',{method:'POST',body}),
   samples: () => request('/api/samples'),
   fsList: (path) => request('/api/fs/list?path=' + enc(path || '')),
   fsRead: (path) => request('/api/fs/read?path=' + enc(path || '')),
@@ -85,7 +95,7 @@ export const api = {
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...payload, stream: true }),
+      body: JSON.stringify({ stream: true, ...payload }),
       signal,
     });
     if (!res.ok || !res.body) {
@@ -93,28 +103,13 @@ export const api = {
       try { const j = await res.json(); detail = j?.error?.message || j?.message || ''; } catch { /* ignore */ }
       throw new ApiError(detail || `AI 请求失败 (${res.status})`, res.status);
     }
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    const handleLine = (line) => {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith('data:')) return;
-      const data = trimmed.slice(5).trim();
-      if (data === '[DONE]') return;
-      try { onEvent(JSON.parse(data)); } catch (err) { console.warn('[api] SSE 解析失败', data.slice(0, 200), err); }
-    };
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, idx);
-        buf = buf.slice(idx + 1);
-        handleLine(line);
-      }
+    for await (const event of readSSE(res.body, { signal })) {
+      if (event.data === '[DONE]') continue;
+      let data;
+      try { data = JSON.parse(event.data); }
+      catch { throw new ApiError('收到无法解析的响应，连接可能已中断。', 502); }
+      onEvent(data);
     }
-    if (buf) handleLine(buf);
   },
 };
 
