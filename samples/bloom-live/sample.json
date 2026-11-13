@@ -1,0 +1,12 @@
+{
+    "id":  "bloom-live",
+    "name":  "BLOOM · 绽放",
+    "theme":  "bloom",
+    "cover":  {
+                  "bg":  "#0A0716",
+                  "fg":  "#F6F1EA",
+                  "accent":  "#FF5C8A"
+              },
+    "desc":  "8 页花开动画演示：深紫/粉/奶油，CSS 动效 + 粒子",
+    "slides":  8
+}

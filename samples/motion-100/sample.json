@@ -1,0 +1,12 @@
+{
+    "id":  "motion-100",
+    "name":  "100 MOTION STUDIES",
+    "theme":  "ink",
+    "cover":  {
+                  "bg":  "#0A0A0B",
+                  "fg":  "#F2EAE0",
+                  "accent":  "#E1402B"
+              },
+    "desc":  "100 页动效清单：字/形/线/色/缓/转/阵/深/质/巧，JS + WAAPI 动效",
+    "slides":  100
+}

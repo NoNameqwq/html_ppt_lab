@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>墨韵 · WebDeck Studio</title>
+<style id="wpx-theme">
+:root{
+  --wpx-bg:#0A0A0B;
+  --wpx-fg:#F2EAE0;
+  --wpx-fg-2:#C9C1B6;
+  --wpx-muted:#8A8A90;
+  --wpx-accent:#E1402B;
+  --wpx-accent-2:#2C6E68;
+  --wpx-line:rgba(242,234,224,.18);
+  --wpx-serif:"Songti SC","Source Han Serif SC","Noto Serif SC",SimSun,serif;
+  --wpx-sans:"PingFang SC","Helvetica Neue","Microsoft YaHei","Noto Sans SC",sans-serif;
+  --wpx-latin:"Inter","Helvetica Neue",Arial,sans-serif;
+  --wpx-radius:6px;
+  --wpx-grain-opacity:0.045;
+  --wpx-vignette-opacity:0.45;
+}
+</style>
+<style id="wpx-css">
+/* 兜底布局：运行时 CSS 加载后覆盖（模板自身可独立预览） */
+html,body{margin:0;padding:0;background:var(--wpx-bg);color:var(--wpx-fg)}
+body.wpx-body{font-family:var(--wpx-sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow:hidden}
+#wpx-app{position:fixed;inset:0;overflow:hidden;background:var(--wpx-bg)}
+#wpx-stage{position:absolute;left:50%;top:50%;width:1920px;height:1080px;
+  transform:translate(-50%,-50%) scale(var(--wpx-scale,.5));transform-origin:center center}
+.wpx-slide{position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden;background:var(--wpx-bg)}
+#wpx-stage>.wpx-slide:first-child{opacity:1;visibility:visible}
+.wpx-slide.is-active{opacity:1 !important;visibility:visible !important}
+.wpx-canvas{position:absolute;inset:0}
+.wpx-el{position:absolute;box-sizing:border-box}
+.wpx-hud{display:none}
+/* ink：墨韵 —— 只保留一套笔墨语言：衬线大字、朱砂细线、编号与留白 */
+.wpx-canvas{background:var(--wpx-bg)}
+</style>
+<link rel="stylesheet" href="/editor/deck-runtime.css" data-wpx-inline="css" />
+</head>
+<body class="wpx-body" data-wpx-grain="on" data-wpx-vignette="on">
+<div id="wpx-app" data-w="1920" data-h="1080">
+  <div id="wpx-stage">
+    <section class="wpx-slide" data-id="s1" data-name="封面" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e100001" style="left:64px;top:50px;width:320px;height:40px;font-family:var(--wpx-latin);font-size:26px;line-height:40px;font-weight:300;color:var(--wpx-fg);letter-spacing:.16em">001</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100002" style="left:1496px;top:50px;width:360px;height:52px;font-family:var(--wpx-latin);font-size:18px;line-height:50px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.16em;text-align:center;border:1px solid var(--wpx-line)">墨韵 / INK</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100003" data-wpx-anim="underlineGrow" data-wpx-anim-params='{"delay":160,"duration":1000,"easing":"expo"}' style="left:64px;top:300px;width:220px;height:1px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100004" data-wpx-anim="clipUp" data-wpx-anim-params='{"delay":280,"duration":1100,"easing":"expo"}' style="left:64px;top:336px;width:1000px;height:224px;font-family:var(--wpx-serif);font-size:168px;line-height:1.18;font-weight:400;color:var(--wpx-fg);letter-spacing:.06em">墨韵</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e1k0a11" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":360,"duration":1500,"easing":"expo"}' style="left:1170px;top:200px;width:640px;height:640px;border:1px solid rgba(242,234,224,.12);border-radius:50%"></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e1k0a12" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":480,"duration":1500,"easing":"expo"}' style="left:1255px;top:285px;width:470px;height:470px;border:1px solid rgba(242,234,224,.07);border-radius:50%"></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e1k0a13" data-wpx-anim="springPop" data-wpx-anim-params='{"delay":1000,"duration":900,"easing":"spring"}' style="left:1485px;top:195px;width:10px;height:10px;border-radius:50%;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e1k0a14" style="left:1810px;top:200px;width:1px;height:640px;background:linear-gradient(180deg,rgba(242,234,224,0),rgba(242,234,224,.18),rgba(242,234,224,0))"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100005" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":540,"duration":1000,"easing":"expo"}' style="left:68px;top:700px;width:900px;height:50px;font-family:var(--wpx-latin);font-size:30px;line-height:50px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.32em">INK & VERMILION</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100006" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":640,"duration":1000,"easing":"expo"}' style="left:68px;top:770px;width:820px;height:62px;font-family:var(--wpx-sans);font-size:26px;line-height:1.5;font-weight:400;color:var(--wpx-fg-2)">一份关于墨色、留白与节奏的版式实验</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100007" style="left:1200px;top:938px;width:656px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em;text-align:right">WEB DECK · TEMPLATE 01</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100008" style="left:64px;top:964px;width:720px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">INK · 2026</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100009" style="left:1516px;top:966px;width:340px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">01 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s2" data-name="序" data-transition="dissolve">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10000a" style="left:64px;top:50px;width:320px;height:40px;font-family:var(--wpx-latin);font-size:26px;line-height:40px;font-weight:300;color:var(--wpx-fg);letter-spacing:.16em">002</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000b" style="left:1496px;top:50px;width:360px;height:52px;font-family:var(--wpx-latin);font-size:18px;line-height:50px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.16em;text-align:center;border:1px solid var(--wpx-line)">PROLOGUE · 序</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10000c" style="left:64px;top:116px;width:1792px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000d" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":0,"duration":900,"easing":"expo"}' style="left:64px;top:214px;width:1792px;height:28px;font-family:var(--wpx-latin);font-size:20px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.3em;text-align:center">留白 / WHITE SPACE</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000e" data-wpx-anim="clipUp" data-wpx-anim-params='{"delay":140,"duration":1100,"easing":"expo"}' style="left:64px;top:330px;width:1792px;height:132px;font-family:var(--wpx-serif);font-size:108px;line-height:1.2;font-weight:400;color:var(--wpx-fg);text-align:center">留白不是空</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000f" data-wpx-anim="clipUp" data-wpx-anim-params='{"delay":300,"duration":1100,"easing":"expo"}' style="left:64px;top:474px;width:1792px;height:132px;font-family:var(--wpx-serif);font-size:108px;line-height:1.2;font-weight:400;color:var(--wpx-fg);text-align:center">是还没说出口的话</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000g" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":620,"duration":900,"easing":"expo"}' style="left:64px;top:742px;width:1792px;height:34px;font-family:var(--wpx-sans);font-size:24px;line-height:34px;font-weight:400;color:var(--wpx-fg-2);text-align:center;letter-spacing:.06em">——— 关于克制的一次注脚</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000h" style="left:64px;top:964px;width:720px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">INK · 2026</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000i" style="left:1516px;top:966px;width:340px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">02 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s3" data-name="三笔触" data-transition="wipeUp">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10000j" style="left:64px;top:50px;width:320px;height:40px;font-family:var(--wpx-latin);font-size:26px;line-height:40px;font-weight:300;color:var(--wpx-fg);letter-spacing:.16em">003</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000k" style="left:1496px;top:50px;width:360px;height:52px;font-family:var(--wpx-latin);font-size:18px;line-height:50px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.16em;text-align:center;border:1px solid var(--wpx-line)">RHYTHM · 节奏</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10000l" style="left:64px;top:116px;width:1792px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000m" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":0,"duration":1000,"easing":"expo"}' style="left:64px;top:150px;width:1200px;height:110px;font-family:var(--wpx-serif);font-size:88px;line-height:1.2;font-weight:400;color:var(--wpx-fg)">三种笔触</div>
+        <div class="wpx-el wpx-html" data-wpx-el="e10000n" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":200,"duration":1200,"easing":"expo"}' style="left:64px;top:470px;width:1640px;height:90px"><svg viewBox="0 0 1640 90" width="1640" height="90" style="overflow:visible">
+  <path d="M0 45H1640" fill="none" stroke="rgba(242,234,224,.22)" stroke-width="1"/>
+  <circle cx="4" cy="45" r="7" fill="#F2EAE0"/>
+  <circle cx="330" cy="45" r="5" fill="#F2EAE0" fill-opacity=".78"/>
+  <circle cx="780" cy="45" r="6.5" fill="#E1402B"/>
+  <circle cx="1230" cy="45" r="5" fill="#F2EAE0" fill-opacity=".78"/>
+  <circle cx="1560" cy="45" r="5" fill="#F2EAE0" fill-opacity=".5"/>
+</svg></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000o" style="left:64px;top:588px;width:540px;height:28px;font-family:var(--wpx-latin);font-size:17px;line-height:28px;font-weight:500;color:var(--wpx-accent);letter-spacing:.24em">01</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000p" style="left:64px;top:620px;width:540px;height:58px;font-family:var(--wpx-serif);font-size:44px;line-height:1.3;font-weight:400;color:var(--wpx-fg)">起笔</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000q" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":320,"duration":900,"easing":"expo"}' style="left:64px;top:700px;width:470px;height:120px;font-family:var(--wpx-sans);font-size:23px;line-height:1.7;font-weight:400;color:var(--wpx-fg-2)">第一笔决定骨架：先定标题与信息的主轴。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000r" style="left:680px;top:588px;width:540px;height:28px;font-family:var(--wpx-latin);font-size:17px;line-height:28px;font-weight:500;color:var(--wpx-accent);letter-spacing:.24em">02</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000s" style="left:680px;top:620px;width:540px;height:58px;font-family:var(--wpx-serif);font-size:44px;line-height:1.3;font-weight:400;color:var(--wpx-fg)">行笔</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000t" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":440,"duration":900,"easing":"expo"}' style="left:680px;top:700px;width:470px;height:120px;font-family:var(--wpx-sans);font-size:23px;line-height:1.7;font-weight:400;color:var(--wpx-fg-2)">中段处理节奏：同一节奏里加入对比，读者才不会疲倦。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000u" style="left:1296px;top:588px;width:540px;height:28px;font-family:var(--wpx-latin);font-size:17px;line-height:28px;font-weight:500;color:var(--wpx-accent);letter-spacing:.24em">03</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000v" style="left:1296px;top:620px;width:540px;height:58px;font-family:var(--wpx-serif);font-size:44px;line-height:1.3;font-weight:400;color:var(--wpx-fg)">收笔</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000w" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":560,"duration":900,"easing":"expo"}' style="left:1296px;top:700px;width:470px;height:120px;font-family:var(--wpx-sans);font-size:23px;line-height:1.7;font-weight:400;color:var(--wpx-fg-2)">收笔留下余味：把最后一页交给一句短句，而不是信息。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000x" style="left:64px;top:964px;width:720px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">INK · 2026</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000y" style="left:1516px;top:966px;width:340px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">03 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s4" data-name="色谱" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10000z" style="left:64px;top:50px;width:320px;height:40px;font-family:var(--wpx-latin);font-size:26px;line-height:40px;font-weight:300;color:var(--wpx-fg);letter-spacing:.16em">004</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100010" style="left:1496px;top:50px;width:360px;height:52px;font-family:var(--wpx-latin);font-size:18px;line-height:50px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.16em;text-align:center;border:1px solid var(--wpx-line)">COLOUR · 色</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100011" style="left:64px;top:116px;width:1792px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100012" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":0,"duration":1000,"easing":"expo"}' style="left:64px;top:150px;width:1400px;height:110px;font-family:var(--wpx-serif);font-size:88px;line-height:1.2;font-weight:400;color:var(--wpx-fg)">五个色，一种墨</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100013" style="left:64px;top:400px;width:300px;height:300px;background:#0A0A0B;border-radius:2px;border:1px solid var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100014" style="left:64px;top:730px;width:300px;height:62px;font-family:var(--wpx-sans);font-size:20px;line-height:1.6;font-weight:400;color:var(--wpx-fg-2)">夜墨<br><span style="font-family:var(--wpx-latin);font-size:16px;letter-spacing:.06em;color:var(--wpx-muted)">#0A0A0B</span></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100015" style="left:404px;top:400px;width:300px;height:300px;background:#141417;border-radius:2px"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100016" style="left:404px;top:730px;width:300px;height:62px;font-family:var(--wpx-sans);font-size:20px;line-height:1.6;font-weight:400;color:var(--wpx-fg-2)">纸黑<br><span style="font-family:var(--wpx-latin);font-size:16px;letter-spacing:.06em;color:var(--wpx-muted)">#141417</span></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100017" data-wpx-anim="springPop" data-wpx-anim-params='{"delay":300,"duration":900,"easing":"expo"}' style="left:744px;top:400px;width:300px;height:300px;background:#E1402B;border-radius:2px"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100018" style="left:744px;top:730px;width:300px;height:62px;font-family:var(--wpx-sans);font-size:20px;line-height:1.6;font-weight:400;color:var(--wpx-fg-2)">朱砂<br><span style="font-family:var(--wpx-latin);font-size:16px;letter-spacing:.06em;color:var(--wpx-muted)">#E1402B</span></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100019" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":360,"duration":900,"easing":"expo"}' style="left:1084px;top:400px;width:300px;height:300px;background:#F2EAE0;border-radius:2px"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001a" style="left:1084px;top:730px;width:300px;height:62px;font-family:var(--wpx-sans);font-size:20px;line-height:1.6;font-weight:400;color:var(--wpx-fg-2)">骨白<br><span style="font-family:var(--wpx-latin);font-size:16px;letter-spacing:.06em;color:var(--wpx-muted)">#F2EAE0</span></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10001b" style="left:1424px;top:400px;width:300px;height:300px;background:#2C6E68;border-radius:2px"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001c" style="left:1424px;top:730px;width:300px;height:62px;font-family:var(--wpx-sans);font-size:20px;line-height:1.6;font-weight:400;color:var(--wpx-fg-2)">青瓷<br><span style="font-family:var(--wpx-latin);font-size:16px;letter-spacing:.06em;color:var(--wpx-muted)">#2C6E68</span></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001d" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":520,"duration":1000,"easing":"expo"}' style="left:64px;top:880px;width:1200px;height:50px;font-family:var(--wpx-serif);font-size:32px;line-height:50px;font-weight:400;color:var(--wpx-accent)">从夜色到朱砂——一条完整的墨谱。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001e" style="left:64px;top:964px;width:720px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">INK · 2026</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001f" style="left:1516px;top:966px;width:340px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">04 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s5" data-name="字形" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10001g" style="left:64px;top:50px;width:320px;height:40px;font-family:var(--wpx-latin);font-size:26px;line-height:40px;font-weight:300;color:var(--wpx-fg);letter-spacing:.16em">005</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001h" style="left:1496px;top:50px;width:360px;height:52px;font-family:var(--wpx-latin);font-size:18px;line-height:50px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.16em;text-align:center;border:1px solid var(--wpx-line)">TYPE · 字</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10001i" style="left:64px;top:116px;width:1792px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001j" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":120,"duration":1500,"easing":"expo"}' style="left:1020px;top:60px;width:700px;height:700px;font-family:var(--wpx-serif);font-size:600px;line-height:1;font-weight:400;color:#141417">墨</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001k" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":0,"duration":1000,"easing":"expo"}' style="left:64px;top:150px;width:1200px;height:110px;font-family:var(--wpx-serif);font-size:88px;line-height:1.2;font-weight:400;color:var(--wpx-fg)">字的骨架</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001l" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":280,"duration":1000,"easing":"expo"}' style="left:64px;top:340px;width:230px;height:200px;font-family:var(--wpx-serif);font-size:150px;line-height:1;font-weight:400;color:var(--wpx-fg)">骨</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001m" style="left:300px;top:340px;width:230px;height:200px;font-family:var(--wpx-sans);font-size:150px;line-height:1;font-weight:400;color:var(--wpx-fg)">白</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001n" style="left:536px;top:340px;width:300px;height:200px;font-family:var(--wpx-latin);font-size:150px;line-height:1;font-weight:200;color:var(--wpx-fg)">Aa</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001o" style="left:64px;top:544px;width:230px;height:26px;font-family:var(--wpx-latin);font-size:15px;line-height:26px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">SERIF / 衬线</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001p" style="left:300px;top:544px;width:230px;height:26px;font-family:var(--wpx-latin);font-size:15px;line-height:26px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">SANS / 无衬线</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001q" style="left:536px;top:544px;width:300px;height:26px;font-family:var(--wpx-latin);font-size:15px;line-height:26px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">LATIN / 拉丁</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001r" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":520,"duration":1000,"easing":"expo"}' style="left:64px;top:640px;width:840px;height:130px;font-family:var(--wpx-sans);font-size:26px;line-height:1.7;font-weight:400;color:var(--wpx-fg-2)">衬线负责语气，无衬线负责信息，等宽负责数字。三者各司其职，不要互相抢戏。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001s" style="left:64px;top:964px;width:720px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">INK · 2026</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001t" style="left:1516px;top:966px;width:340px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">05 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s6" data-name="引语" data-transition="dissolve">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10001u" style="left:64px;top:50px;width:320px;height:40px;font-family:var(--wpx-latin);font-size:26px;line-height:40px;font-weight:300;color:var(--wpx-fg);letter-spacing:.16em">006</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001v" style="left:1496px;top:50px;width:360px;height:52px;font-family:var(--wpx-latin);font-size:18px;line-height:50px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.16em;text-align:center;border:1px solid var(--wpx-line)">QUOTE · 引</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10001w" style="left:64px;top:116px;width:1792px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001x" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":0,"duration":900,"easing":"expo"}' style="left:64px;top:140px;width:240px;height:240px;font-family:var(--wpx-serif);font-size:200px;line-height:1;font-weight:400;color:var(--wpx-accent)">“</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001y" data-wpx-anim="clipUp" data-wpx-anim-params='{"delay":160,"duration":1100,"easing":"expo"}' style="left:64px;top:386px;width:1600px;height:112px;font-family:var(--wpx-serif);font-size:76px;line-height:1.5;font-weight:400;color:var(--wpx-fg)">少即是多，</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001z" data-wpx-anim="clipUp" data-wpx-anim-params='{"delay":320,"duration":1100,"easing":"expo"}' style="left:64px;top:506px;width:1600px;height:112px;font-family:var(--wpx-serif);font-size:76px;line-height:1.5;font-weight:400;color:var(--wpx-fg)">慢即是快。</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100020" data-wpx-anim="underlineGrow" data-wpx-anim-params='{"delay":560,"duration":900,"easing":"expo"}' style="left:64px;top:656px;width:120px;height:2px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100021" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":620,"duration":900,"easing":"expo"}' style="left:64px;top:700px;width:900px;height:34px;font-family:var(--wpx-sans);font-size:24px;line-height:34px;font-weight:400;color:var(--wpx-muted)">—— 密斯 · 凡德罗</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100022" style="left:64px;top:964px;width:720px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">INK · 2026</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100023" style="left:1516px;top:966px;width:340px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">06 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s7" data-name="收尾" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e100024" style="left:64px;top:50px;width:320px;height:40px;font-family:var(--wpx-latin);font-size:26px;line-height:40px;font-weight:300;color:var(--wpx-fg);letter-spacing:.16em">007</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100025" style="left:1496px;top:50px;width:360px;height:52px;font-family:var(--wpx-latin);font-size:18px;line-height:50px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.16em;text-align:center;border:1px solid var(--wpx-line)">FINALE · 落</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100026" style="left:64px;top:116px;width:1792px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100027" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":0,"duration":900,"easing":"expo"}' style="left:64px;top:300px;width:1792px;height:28px;font-family:var(--wpx-latin);font-size:20px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.3em;text-align:center">END / 结</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100028" data-wpx-anim="clipUp" data-wpx-anim-params='{"delay":140,"duration":1200,"easing":"expo"}' style="left:64px;top:366px;width:1792px;height:170px;font-family:var(--wpx-serif);font-size:128px;line-height:1.3;font-weight:400;color:var(--wpx-fg);text-align:center">墨尽而意存</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100029" data-wpx-anim="underlineGrow" data-wpx-anim-params='{"delay":420,"duration":900,"easing":"expo"}' style="left:912px;top:600px;width:96px;height:2px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10002a" style="left:64px;top:660px;width:1792px;height:34px;font-family:var(--wpx-sans);font-size:24px;line-height:34px;font-weight:400;color:var(--wpx-fg-2);text-align:center">WebDeck Studio · 墨韵模板</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10002b" style="left:64px;top:964px;width:720px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">INK · 2026</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10002c" style="left:1516px;top:966px;width:340px;height:30px;font-family:var(--wpx-latin);font-size:13px;line-height:30px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">07 / 07</div>
+      </div>
+    </section>
+  </div>
+  <div class="wpx-hud" aria-hidden="true"></div>
+</div>
+<script type="application/json" id="wpx-data">
+{
+ "title": "墨韵 · WebDeck Studio",
+ "w": 1920,
+ "h": 1080,
+ "theme": "ink",
+ "slides": [
+  {
+   "id": "s1",
+   "name": "封面",
+   "transition": "fade"
+  },
+  {
+   "id": "s2",
+   "name": "序",
+   "transition": "dissolve"
+  },
+  {
+   "id": "s3",
+   "name": "三笔触",
+   "transition": "wipeUp"
+  },
+  {
+   "id": "s4",
+   "name": "色谱",
+   "transition": "fade"
+  },
+  {
+   "id": "s5",
+   "name": "字形",
+   "transition": "fade"
+  },
+  {
+   "id": "s6",
+   "name": "引语",
+   "transition": "dissolve"
+  },
+  {
+   "id": "s7",
+   "name": "收尾",
+   "transition": "fade"
+  }
+ ]
+}
+</script>
+<script src="/editor/fx-presets.js" data-wpx-inline="js"></script>
+<script src="/editor/deck-runtime.js" data-wpx-inline="js"></script>
+</body>
+</html>

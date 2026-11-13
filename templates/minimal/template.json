@@ -1,0 +1,13 @@
+{
+  "id": "minimal",
+  "name": "素白",
+  "desc": "浅色商务极简：12 栏细网格、大留白、黑灰为骨，一点油墨蓝点睛。",
+  "theme": "editorial",
+  "slides": 7,
+  "order": 40,
+  "cover": {
+    "bg": "#FBF8F1",
+    "fg": "#16151A",
+    "accent": "#1B3A8C"
+  }
+}

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WebDeck Studio · 网页演播工作台</title>
+<link rel="stylesheet" href="/app/styles/base.css" />
+<link rel="stylesheet" href="/app/styles/chrome.css" />
+<link rel="stylesheet" href="/app/styles/library.css" />
+<link rel="stylesheet" href="/app/styles/editor.css" />
+<link rel="stylesheet" href="/app/styles/animations.css" />
+<link rel="stylesheet" href="/app/styles/agent.css" />
+<link rel="stylesheet" href="/app/styles/design-v3.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231B1A17'/%3E%3Cpath d='M18 20h28M18 32h18M18 44h24' stroke='%23F2EAE0' stroke-width='5' stroke-linecap='round'/%3E%3Ccircle cx='47' cy='45' r='6' fill='%23E1402B'/%3E%3C/svg%3E" />
+</head>
+<body>
+<div id="app" data-route="library" data-theme="light">
+  <!-- 顶部标题栏 -->
+  <header id="titlebar" class="titlebar"></header>
+
+  <!-- Ribbon 标签页 + 内容（由 ui/ribbon.js 渲染） -->
+  <div id="ribbon" class="ribbon" aria-label="功能区"></div>
+
+  <!-- 主区域 -->
+  <main id="main" class="app-main">
+    <!-- 文件库 -->
+    <section id="library-view" class="library-view" aria-label="文件库"></section>
+
+    <!-- 编辑器 -->
+    <section id="editor-view" class="editor-view" aria-label="编辑器">
+      <aside id="slide-panel" class="slide-panel" aria-label="幻灯片"></aside>
+      <div id="canvas-area" class="canvas-area">
+        <div id="canvas-viewport" class="canvas-viewport">
+          <div id="canvas-frame-wrap" class="canvas-frame-wrap">
+            <div class="canvas-frame-shadow" aria-hidden="true"></div>
+            <iframe id="deck-frame" class="deck-frame" title="幻灯片画布"></iframe>
+          </div>
+        </div>
+        <div id="selection-layer" class="selection-layer" aria-hidden="true"></div>
+        <div id="canvas-overlays" class="canvas-overlays" aria-hidden="true"></div>
+        <div id="canvas-toolbar" class="canvas-toolbar"></div>
+        <div id="canvas-hint" class="canvas-hint"></div>
+      </div>
+      <aside id="inspector" class="inspector" aria-label="属性面板"></aside>
+    </section>
+  </main>
+
+  <!-- 右侧 Agent 栏 -->
+  <aside id="agent-panel" class="agent-panel" aria-label="Agent 助手"></aside>
+
+  <!-- 底部状态栏 -->
+  <footer id="statusbar" class="statusbar"></footer>
+
+  <!-- 浮层挂载点 -->
+  <div id="overlay-root" class="overlay-root"></div>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+  <div id="present-root" class="present-root"></div>
+  <div id="splash" class="splash">
+    <div class="splash-mark" aria-hidden="true">
+      <span></span><span></span><span></span>
+    </div>
+    <div class="splash-name">WebDeck Studio</div>
+    <div class="splash-tip">正在准备工作台…</div>
+  </div>
+</div>
+<!-- 动效预设库（经典脚本，供动效库 UI 读取 window.WPX_FX / WPX_FX_CATALOG） -->
+<script src="/editor/fx-presets.js"></script>
+<script type="module" src="/app/js/main.js"></script>
+</body>
+</html>

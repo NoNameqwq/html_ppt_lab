@@ -1,0 +1,15 @@
+{
+  "name": "webdeck-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "WebDeck Studio · 网页演播工作台（仿 PowerPoint 界面 + 内置 AI Agent）",
+  "scripts": {
+    "start": "node server.mjs",
+    "dev": "node server.mjs",
+    "qa": "node scripts/qa.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

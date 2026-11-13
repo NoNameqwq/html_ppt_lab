@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>素白 · WebDeck Studio</title>
+<style id="wpx-theme">
+:root{
+  --wpx-bg:#FBF8F1;
+  --wpx-fg:#16151A;
+  --wpx-fg-2:#46444B;
+  --wpx-muted:#85817C;
+  --wpx-accent:#1B3A8C;
+  --wpx-accent-2:#B5342A;
+  --wpx-line:rgba(22,21,26,.16);
+  --wpx-serif:"Songti SC","Source Han Serif SC","Noto Serif SC",SimSun,serif;
+  --wpx-sans:"PingFang SC","Helvetica Neue","Microsoft YaHei","Noto Sans SC",sans-serif;
+  --wpx-latin:Georgia,"Times New Roman",Songti SC,serif;
+  --wpx-radius:2px;
+  --wpx-grain-opacity:0.03;
+  --wpx-vignette-opacity:0.1;
+}
+</style>
+<style id="wpx-css">
+/* 兜底布局：运行时 CSS 加载后覆盖（模板自身可独立预览） */
+html,body{margin:0;padding:0;background:var(--wpx-bg);color:var(--wpx-fg)}
+body.wpx-body{font-family:var(--wpx-sans);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow:hidden}
+#wpx-app{position:fixed;inset:0;overflow:hidden;background:var(--wpx-bg)}
+#wpx-stage{position:absolute;left:50%;top:50%;width:1920px;height:1080px;
+  transform:translate(-50%,-50%) scale(var(--wpx-scale,.5));transform-origin:center center}
+.wpx-slide{position:absolute;inset:0;overflow:hidden;opacity:0;visibility:hidden;background:var(--wpx-bg)}
+#wpx-stage>.wpx-slide:first-child{opacity:1;visibility:visible}
+.wpx-slide.is-active{opacity:1 !important;visibility:visible !important}
+.wpx-canvas{position:absolute;inset:0}
+.wpx-el{position:absolute;box-sizing:border-box}
+.wpx-hud{display:none}
+/* minimal：素白 —— 细网格与大留白，只用一点蓝做点睛 */
+.wpx-canvas{background:var(--wpx-bg)}
+</style>
+<link rel="stylesheet" href="/editor/deck-runtime.css" data-wpx-inline="css" />
+</head>
+<body class="wpx-body" data-wpx-grain="on" data-wpx-vignette="off">
+<div id="wpx-app" data-w="1920" data-h="1080">
+  <div id="wpx-stage">
+    <section class="wpx-slide" data-id="s1" data-name="封面" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-shape" data-wpx-el="e100001" style="left:0px;top:0px;width:1920px;height:1080px;background-image:linear-gradient(90deg,rgba(22,21,26,.07) 0,rgba(22,21,26,.07) 1px,transparent 1px,transparent 100%);background-size:151.33px 100%;background-repeat:repeat-x;background-position:64px 0"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100002" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":0,"duration":700,"easing":"expo"}' style="left:64px;top:64px;width:720px;height:24px;font-family:var(--wpx-latin);font-size:14px;line-height:24px;font-weight:500;color:var(--wpx-fg-2);letter-spacing:.26em;text-transform:uppercase">WDS / MINIMAL</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100003" style="left:1516px;top:64px;width:340px;height:24px;font-family:var(--wpx-latin);font-size:13px;line-height:24px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">TEMPLATE 04</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100004" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":120,"duration":900,"easing":"expo"}' style="left:64px;top:268px;width:1300px;height:142px;font-family:var(--wpx-sans);font-size:112px;line-height:1.25;font-weight:600;color:var(--wpx-fg);letter-spacing:-.01em">把复杂，</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100005" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":240,"duration":900,"easing":"expo"}' style="left:64px;top:408px;width:1300px;height:142px;font-family:var(--wpx-sans);font-size:112px;line-height:1.25;font-weight:600;color:var(--wpx-fg);letter-spacing:-.01em">留给系统。</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100006" data-wpx-anim="underlineGrow" data-wpx-anim-params='{"delay":420,"duration":900,"easing":"expo"}' style="left:64px;top:590px;width:72px;height:4px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100007" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":520,"duration":900,"easing":"expo"}' style="left:64px;top:636px;width:940px;height:92px;font-family:var(--wpx-sans);font-size:26px;line-height:1.7;font-weight:400;color:var(--wpx-fg-2)">素白模板：细网格、大留白，黑灰为骨，一点蓝为神。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100008" style="left:64px;top:910px;width:240px;height:24px;font-family:var(--wpx-latin);font-size:13px;line-height:24px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">WEB DECK</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100009" style="left:320px;top:910px;width:240px;height:24px;font-family:var(--wpx-latin);font-size:13px;line-height:24px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">TEMPLATE · 素白</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000a" style="left:576px;top:910px;width:240px;height:24px;font-family:var(--wpx-latin);font-size:13px;line-height:24px;font-weight:400;color:var(--wpx-muted);letter-spacing:.2em">2026</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000b" style="left:64px;top:964px;width:760px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.22em">© WebDeck Studio</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000c" style="left:1516px;top:966px;width:340px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">01 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s2" data-name="章节" data-transition="pushLeft">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10000d" data-wpx-anim="zoomIn" data-wpx-anim-params='{"delay":0,"duration":900,"easing":"expo"}' style="left:64px;top:190px;width:560px;height:300px;font-family:var(--wpx-latin);font-size:240px;line-height:1;font-weight:200;color:var(--wpx-accent);letter-spacing:-.02em">02</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000e" style="left:1150px;top:232px;width:706px;height:26px;font-family:var(--wpx-latin);font-size:14px;line-height:26px;font-weight:400;color:var(--wpx-muted);letter-spacing:.28em;text-align:right">SECTION 01 / 原则</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10000f" style="left:64px;top:540px;width:1792px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000g" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":160,"duration":900,"easing":"expo"}' style="left:64px;top:578px;width:1400px;height:112px;font-family:var(--wpx-sans);font-size:84px;line-height:1.3;font-weight:600;color:var(--wpx-fg)">先结构，后风格</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000h" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":320,"duration":900,"easing":"expo"}' style="left:64px;top:722px;width:980px;height:100px;font-family:var(--wpx-sans);font-size:24px;line-height:1.7;font-weight:400;color:var(--wpx-fg-2)">信息层级决定版式结构，版式结构决定视觉表达。</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10000i" style="left:64px;top:690px;width:72px;height:3px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000j" style="left:64px;top:964px;width:760px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.22em">© WebDeck Studio</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000k" style="left:1516px;top:966px;width:340px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">02 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s3" data-name="原则" data-transition="pushUp">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10000l" style="left:64px;top:90px;width:760px;height:24px;font-family:var(--wpx-latin);font-size:14px;line-height:24px;font-weight:400;color:var(--wpx-muted);letter-spacing:.24em">原则 / PRINCIPLES</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000m" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":0,"duration":900,"easing":"expo"}' style="left:64px;top:130px;width:1100px;height:88px;font-family:var(--wpx-sans);font-size:64px;line-height:1.3;font-weight:600;color:var(--wpx-fg)">三条工作方式</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10000n" style="left:64px;top:232px;width:64px;height:3px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10000o" style="left:64px;top:300px;width:560px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000p" style="left:64px;top:324px;width:560px;height:24px;font-family:var(--wpx-latin);font-size:14px;line-height:24px;font-weight:500;color:var(--wpx-accent);letter-spacing:.22em">01</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000q" style="left:64px;top:364px;width:560px;height:48px;font-family:var(--wpx-sans);font-size:32px;line-height:1.4;font-weight:600;color:var(--wpx-fg)">先对齐目标</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000r" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":180,"duration":900,"easing":"expo"}' style="left:64px;top:438px;width:500px;height:130px;font-family:var(--wpx-sans);font-size:20px;line-height:1.8;font-weight:400;color:var(--wpx-fg-2)">每页回答一个问题，删掉与它无关的信息。</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10000s" style="left:669px;top:300px;width:560px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000t" style="left:669px;top:324px;width:560px;height:24px;font-family:var(--wpx-latin);font-size:14px;line-height:24px;font-weight:500;color:var(--wpx-accent);letter-spacing:.22em">02</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000u" style="left:669px;top:364px;width:560px;height:48px;font-family:var(--wpx-sans);font-size:32px;line-height:1.4;font-weight:600;color:var(--wpx-fg)">再收敛方案</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000v" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":300,"duration":900,"easing":"expo"}' style="left:669px;top:438px;width:500px;height:130px;font-family:var(--wpx-sans);font-size:20px;line-height:1.8;font-weight:400;color:var(--wpx-fg-2)">一页只留一个视觉焦点，其余为它让路。</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10000w" style="left:1274px;top:300px;width:560px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000x" style="left:1274px;top:324px;width:560px;height:24px;font-family:var(--wpx-latin);font-size:14px;line-height:24px;font-weight:500;color:var(--wpx-accent);letter-spacing:.22em">03</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000y" style="left:1274px;top:364px;width:560px;height:48px;font-family:var(--wpx-sans);font-size:32px;line-height:1.4;font-weight:600;color:var(--wpx-fg)">最后打磨细节</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10000z" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":420,"duration":900,"easing":"expo"}' style="left:1274px;top:438px;width:500px;height:130px;font-family:var(--wpx-sans);font-size:20px;line-height:1.8;font-weight:400;color:var(--wpx-fg-2)">字号、间距、颜色都收敛成一套可复用的规则。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100010" style="left:64px;top:964px;width:760px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.22em">© WebDeck Studio</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100011" style="left:1516px;top:966px;width:340px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">03 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s4" data-name="图文" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e100012" style="left:64px;top:90px;width:760px;height:24px;font-family:var(--wpx-latin);font-size:14px;line-height:24px;font-weight:400;color:var(--wpx-muted);letter-spacing:.24em">示例 / LAYOUT</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100013" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":0,"duration":900,"easing":"expo"}' style="left:64px;top:130px;width:800px;height:84px;font-family:var(--wpx-sans);font-size:68px;line-height:1.3;font-weight:600;color:var(--wpx-fg)">左文右图</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100014" data-wpx-anim="underlineGrow" data-wpx-anim-params='{"delay":160,"duration":800,"easing":"expo"}' style="left:64px;top:238px;width:64px;height:3px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100015" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":360,"duration":900,"easing":"expo"}' style="left:64px;top:286px;width:600px;height:220px;font-family:var(--wpx-sans);font-size:21px;line-height:1.85;font-weight:400;color:var(--wpx-fg-2)">左侧承载叙述，右侧承载证据。两栏之间保持 64px 的呼吸带，视线自然过渡。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100016" style="left:64px;top:560px;width:600px;height:26px;font-family:var(--wpx-latin);font-size:13px;line-height:26px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em">图片可替换为真实素材</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100017" data-wpx-anim="zoomIn" data-wpx-anim-params='{"delay":200,"duration":1000,"easing":"expo"}' style="left:800px;top:140px;width:1056px;height:720px;background:#EFEADF;border:1px solid var(--wpx-line);border-radius:2px"></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100018" style="left:1327px;top:140px;width:1px;height:720px;background:rgba(22,21,26,.12)"></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e100019" style="left:800px;top:499px;width:1056px;height:1px;background:rgba(22,21,26,.12)"></div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10001a" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":480,"duration":900,"easing":"expo"}' style="left:1040px;top:380px;width:420px;height:300px;background:var(--wpx-accent);opacity:.92"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001b" style="left:832px;top:806px;width:700px;height:24px;font-family:var(--wpx-latin);font-size:12px;line-height:24px;font-weight:400;color:var(--wpx-fg-2);letter-spacing:.2em">IMAGE PLACEHOLDER · 16 : 9</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001c" style="left:64px;top:964px;width:760px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.22em">© WebDeck Studio</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001d" style="left:1516px;top:966px;width:340px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">04 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s5" data-name="数据" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10001e" style="left:64px;top:90px;width:760px;height:24px;font-family:var(--wpx-latin);font-size:14px;line-height:24px;font-weight:400;color:var(--wpx-muted);letter-spacing:.24em">数据 / METRICS</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001f" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":0,"duration":900,"easing":"expo"}' style="left:64px;top:130px;width:1000px;height:88px;font-family:var(--wpx-sans);font-size:64px;line-height:1.3;font-weight:600;color:var(--wpx-fg)">可量化的收益</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10001g" style="left:64px;top:300px;width:1792px;height:1px;background:var(--wpx-line)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001h" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":160,"duration":900,"easing":"expo"}' style="left:64px;top:340px;width:560px;height:140px;font-family:var(--wpx-sans);font-size:112px;line-height:1;font-weight:300;color:var(--wpx-accent);letter-spacing:-.02em">12.4%</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001i" style="left:64px;top:496px;width:560px;height:130px;font-family:var(--wpx-sans);font-size:20px;line-height:1.6;font-weight:400;color:var(--wpx-fg-2)">平均阅读完成率<br><span style="font-size:16px;letter-spacing:.02em;color:var(--wpx-muted)">+12.4% MoM</span></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001j" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":260,"duration":900,"easing":"expo"}' style="left:669px;top:340px;width:560px;height:140px;font-family:var(--wpx-sans);font-size:112px;line-height:1;font-weight:300;color:var(--wpx-fg);letter-spacing:-.02em">86</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001k" style="left:669px;top:496px;width:560px;height:130px;font-family:var(--wpx-sans);font-size:20px;line-height:1.6;font-weight:400;color:var(--wpx-fg-2)">内置页面 / 版式<br><span style="font-size:16px;letter-spacing:.02em;color:var(--wpx-muted)">6 类结构</span></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001l" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":360,"duration":900,"easing":"expo"}' style="left:1274px;top:340px;width:560px;height:140px;font-family:var(--wpx-sans);font-size:112px;line-height:1;font-weight:300;color:var(--wpx-fg);letter-spacing:-.02em">3.2×</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001m" style="left:1274px;top:496px;width:560px;height:130px;font-family:var(--wpx-sans);font-size:20px;line-height:1.6;font-weight:400;color:var(--wpx-fg-2)">制作效率倍数<br><span style="font-size:16px;letter-spacing:.02em;color:var(--wpx-muted)">对比手写 HTML</span></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001n" style="left:64px;top:700px;width:900px;height:28px;font-family:var(--wpx-sans);font-size:16px;line-height:1.7;font-weight:400;color:var(--wpx-muted)">示例数据，仅用于版式演示。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001o" style="left:64px;top:964px;width:760px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.22em">© WebDeck Studio</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001p" style="left:1516px;top:966px;width:340px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">05 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s6" data-name="留白" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-shape" data-wpx-el="e10001q" style="left:0px;top:0px;width:1920px;height:1080px;background-image:linear-gradient(90deg,rgba(22,21,26,.07) 0,rgba(22,21,26,.07) 1px,transparent 1px,transparent 100%);background-size:151.33px 100%;background-repeat:repeat-x;background-position:64px 0"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001r" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":0,"duration":1000,"easing":"expo"}' style="left:64px;top:420px;width:1792px;height:132px;font-family:var(--wpx-sans);font-size:92px;line-height:1.3;font-weight:600;color:var(--wpx-fg);text-align:center;letter-spacing:-.01em">留白，是内容的一部分。</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10001s" data-wpx-anim="underlineGrow" data-wpx-anim-params='{"delay":360,"duration":900,"easing":"expo"}' style="left:912px;top:590px;width:64px;height:3px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001t" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":480,"duration":900,"easing":"expo"}' style="left:64px;top:640px;width:1792px;height:34px;font-family:var(--wpx-sans);font-size:24px;line-height:34px;font-weight:400;color:var(--wpx-fg-2);text-align:center">每页只讲一件事，其余交给空气。</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001u" style="left:64px;top:964px;width:760px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.22em">© WebDeck Studio</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001v" style="left:1516px;top:966px;width:340px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">06 / 07</div>
+      </div>
+    </section>
+    <section class="wpx-slide" data-id="s7" data-name="收尾" data-transition="fade">
+      <div class="wpx-canvas">
+        <div class="wpx-el wpx-text" data-wpx-el="e10001w" data-wpx-anim="fadeIn" data-wpx-anim-params='{"delay":0,"duration":800,"easing":"expo"}' style="left:64px;top:320px;width:1792px;height:26px;font-family:var(--wpx-latin);font-size:14px;line-height:26px;font-weight:400;color:var(--wpx-muted);letter-spacing:.3em;text-align:center">THANKS</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001x" data-wpx-anim="fadeUp" data-wpx-anim-params='{"delay":120,"duration":1000,"easing":"expo"}' style="left:64px;top:378px;width:1792px;height:116px;font-family:var(--wpx-sans);font-size:84px;line-height:1.3;font-weight:600;color:var(--wpx-fg);text-align:center">接下来，交给你的内容。</div>
+        <div class="wpx-el wpx-shape" data-wpx-el="e10001y" data-wpx-anim="underlineGrow" data-wpx-anim-params='{"delay":380,"duration":900,"easing":"expo"}' style="left:912px;top:540px;width:96px;height:3px;background:var(--wpx-accent)"></div>
+        <div class="wpx-el wpx-text" data-wpx-el="e10001z" style="left:64px;top:600px;width:1792px;height:34px;font-family:var(--wpx-sans);font-size:22px;line-height:34px;font-weight:400;color:var(--wpx-fg-2);text-align:center">WebDeck Studio · 素白模板</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100020" style="left:64px;top:964px;width:760px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.22em">© WebDeck Studio</div>
+        <div class="wpx-el wpx-text" data-wpx-el="e100021" style="left:1516px;top:966px;width:340px;height:28px;font-family:var(--wpx-latin);font-size:13px;line-height:28px;font-weight:400;color:var(--wpx-muted);letter-spacing:.18em;text-align:right">07 / 07</div>
+      </div>
+    </section>
+  </div>
+  <div class="wpx-hud" aria-hidden="true"></div>
+</div>
+<script type="application/json" id="wpx-data">
+{
+ "title": "素白 · WebDeck Studio",
+ "w": 1920,
+ "h": 1080,
+ "theme": "editorial",
+ "slides": [
+  {
+   "id": "s1",
+   "name": "封面",
+   "transition": "fade"
+  },
+  {
+   "id": "s2",
+   "name": "章节",
+   "transition": "pushLeft"
+  },
+  {
+   "id": "s3",
+   "name": "原则",
+   "transition": "pushUp"
+  },
+  {
+   "id": "s4",
+   "name": "图文",
+   "transition": "fade"
+  },
+  {
+   "id": "s5",
+   "name": "数据",
+   "transition": "fade"
+  },
+  {
+   "id": "s6",
+   "name": "留白",
+   "transition": "fade"
+  },
+  {
+   "id": "s7",
+   "name": "收尾",
+   "transition": "fade"
+  }
+ ]
+}
+</script>
+<script src="/editor/fx-presets.js" data-wpx-inline="js"></script>
+<script src="/editor/deck-runtime.js" data-wpx-inline="js"></script>
+</body>
+</html>

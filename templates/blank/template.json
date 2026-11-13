@@ -1,0 +1,9 @@
+{
+  "id": "blank",
+  "name": "空白",
+  "desc": "1 页纯白空白，从零开始搭建。",
+  "theme": "mono",
+  "slides": 1,
+  "cover": { "bg": "#FFFFFF", "fg": "#111113", "accent": "#D92B1E" },
+  "order": 1
+}

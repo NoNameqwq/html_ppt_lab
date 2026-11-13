@@ -1,0 +1,26 @@
+/* WebDeck Studio · 缩略图 / 模板预览专用 CSS */
+/* 把单页 deck 缩放铺满 iframe，并强制 CSS/WAAPI 动画到终态 */
+
+html,body{height:100%;margin:0;overflow:hidden;background:transparent}
+body.wpx-thumb-body{background:var(--wpx-bg,#0A0A0B)}
+#wpx-app{position:fixed;inset:0;overflow:hidden;background:var(--wpx-bg,#0A0A0B)}
+#wpx-stage{
+  position:absolute;left:50%;top:50%;width:1920px;height:1080px;
+  transform:translate(-50%,-50%) scale(var(--s,0.1));
+  transform-origin:center center;transform-style:preserve-3d;perspective:2000px;
+}
+/* 缩略图里所有动画瞬间到终态 */
+*,*::before,*::after{
+  animation-duration:.001s!important;
+  animation-delay:0s!important;
+  animation-iteration-count:1!important;
+  animation-fill-mode:both!important;
+  animation-play-state:running!important;
+  transition:none!important;
+}
+/* 单页激活态 */
+.wpx-slide{opacity:1!important;visibility:visible!important;pointer-events:none!important}
+.wpx-slide > .wpx-canvas{opacity:1!important;visibility:visible!important;pointer-events:none!important}
+.wpx-hud{display:none!important}
+body[data-wpx-grain="on"]::after,
+body[data-wpx-vignette="on"]::before{display:none!important}

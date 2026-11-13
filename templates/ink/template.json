@@ -1,0 +1,13 @@
+{
+  "id": "ink",
+  "name": "墨韵",
+  "desc": "motion-100 气质：墨黑底、骨白衬线大字、朱砂细线；克制、留白、编号。",
+  "theme": "ink",
+  "slides": 7,
+  "order": 20,
+  "cover": {
+    "bg": "#0A0A0B",
+    "fg": "#F2EAE0",
+    "accent": "#E1402B"
+  }
+}

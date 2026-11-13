@@ -1,0 +1,13 @@
+{
+  "id": "bloom",
+  "name": "繁花",
+  "desc": "深紫底、花期粉与奶油光：柔光衬线标题、十二瓣花开的生长叙事。",
+  "theme": "bloom",
+  "slides": 7,
+  "order": 30,
+  "cover": {
+    "bg": "#0B0816",
+    "fg": "#F6F1EA",
+    "accent": "#FF5C8A"
+  }
+}
