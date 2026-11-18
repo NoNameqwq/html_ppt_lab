@@ -6,6 +6,10 @@ import { API_CATALOG, apiURL } from './api-catalog.js';
 import { renderFormula, sanitizeSvg, formulaMarkup, preparePageRichContent } from '../core/rich-content.js';
 import { buildNavigationHTML, resolveChapters } from '../core/deck-navigation.js';
 import { availableFonts, recommendFonts } from '../core/fonts.js';
+import { threeMarkup } from '../core/three-content.js';
+import { buildTypeKit, adaptToBackground, TYPE_FONTS, TYPE_GROUPS, TYPE_PRESETS, typePreset } from '../core/type-kit.js';
+import { fetchStrokes } from '../core/stroke-data.js';
+import { favoriteHasCode } from '../core/favorite-data.js';
 
 /* 文本截断（core/dom.js 未提供） */
 function truncate(str, max = 120) {
@@ -16,17 +20,26 @@ function truncate(str, max = 120) {
 /* ---------- 工具元信息（UI 卡片显示用） ---------- */
 
 export const TOOL_META = {
+  agent_parallel:{label:'并行子代理',kind:'read',icon:'users'},
+  agent_parallel_status:{label:'查看子代理进度',kind:'read',icon:'users'},
+  agent_wait:{label:'等待所需子代理',kind:'read',icon:'users'},
+  agent_handoff:{label:'子代理交接',kind:'read',icon:'users'},
+  deck_insert_3d:{label:'构建交互式 3D',kind:'write',icon:'box'},
+  deck_get_3d_state:{label:'检查 3D 渲染状态',kind:'read',icon:'box'},
   deck_set_navigation: { label: '设计章节目录', kind: 'write', icon: 'list' },
   deck_generate_image: { label: '生成并插入配图', kind: 'write', icon: 'image' },
   deck_insert_math: { label: '排版 LaTeX 公式', kind: 'write', icon: 'code' },
   deck_insert_svg: { label: '绘制 SVG 图解', kind: 'write', icon: 'shapes' },
   deck_auto_fonts: { label: '自动选择字体', kind: 'write', icon: 'type' },
+  deck_insert_type: { label: '排版艺术字', kind: 'write', icon: 'type' },
+  type_presets: { label: '查看艺术字预设', kind: 'read', icon: 'type' },
   fonts_list: { label: '查看可用字体', kind: 'read', icon: 'type' },
   app_list_apis: { label: '发现网页接口', kind: 'read', icon: 'list' },
   app_call_api: { label: '调用网页接口', kind: 'read', icon: 'terminal' },
   tool_result_read: { label: '读取完整工具结果', kind: 'read', icon: 'file-text' },
   file_patch: { label: '局部修改文件', kind: 'file', icon: 'code' },
   deck_get_state: { label: '读取工程状态', kind: 'read', icon: 'cpu' },
+  deck_capture_slide: { label:'查看页面画面',kind:'read',icon:'image' },
   deck_read_slide: { label: '读取幻灯片', kind: 'read', icon: 'layout' },
   deck_get_element: { label: '读取元素', kind: 'read', icon: 'search' },
   deck_get_html: { label: '读取 deck HTML', kind: 'read', icon: 'code' },
@@ -57,6 +70,7 @@ export const TOOL_META = {
   deck_set_deck_js: { label: '修改全局 JS', kind: 'write', icon: 'terminal' },
   deck_set_custom_transition: { label: '自定义页面转场', kind: 'write', icon: 'film' },
   deck_set_timeline: { label: '动画时间线', kind: 'write', icon: 'film' },
+  deck_get_timeline: { label: '读取动画时间线', kind: 'read', icon: 'film' },
   deck_apply_slide_html: { label: '替换整页 HTML', kind: 'write', icon: 'file-code' },
   deck_set_theme: { label: '切换主题', kind: 'write', icon: 'palette' },
   deck_set_deck_flags: { label: '设置全局效果', kind: 'write', icon: 'sliders' },
@@ -81,6 +95,7 @@ export function mutationProject(ctx, name, args = {}) {
       && op.id !== 'versions.create' ? args.projectId || current : null;
   }
   if (name === 'app_run_command') {
+    if (['favorites.save','favorites.open'].includes(args.name)) return null;
     if (commandAccess(String(args.name || '')) === 'blocked') return null;
     if (/^(app\.(save|reloadDeck|settings)|file\.(export|download)|view\.|present\.|zoom\.|agent\.)/.test(args.name || '')) return null;
   }
@@ -139,6 +154,7 @@ export function getToolDefinitionsForPermission(permission, options = {}) {
     const name = d.function && d.function.name;
     if (name === 'web_search' && !options.webSearch) return false;
     if (name === 'deck_generate_image' && !options.imageGeneration) return false;
+    if (name === 'deck_capture_slide' && options.vision === false) return false;
     return canUseTool(permission, name);
   });
 }
@@ -163,9 +179,10 @@ const XYWH = {
 };
 
 const NAV_SCHEMA = {
-  type: 'object', description: '可跳转的动画目录。目录占 slides 中的一页，不额外增加页数。章节 slideIndex 为最终数组中的 0 起始索引。',
-  properties: { style: { type: 'string', enum: ['petals', 'orbit', 'steps'] }, title: { type: 'string' }, subtitle: { type: 'string' },
-    chapters: { type: 'array', minItems: 2, maxItems: 6, items: { type: 'object', properties: { title: { type: 'string' }, slideIndex: { type: 'integer' }, description: { type: 'string' }, color: { type: 'string' } }, required: ['title', 'slideIndex'], additionalProperties: false } } }, required: ['chapters'], additionalProperties: false,
+  type: 'object', description: 'Chapter navigation occupies one page of the requested total. slideIndex is the zero-based index in the final slides array.',
+  properties: { style: { type: 'string', enum: ['custom','petals', 'orbit', 'steps'],description:'Prefer custom: invent the navigation metaphor from the content. Named presets are optional shortcuts.' }, title: { type: 'string' }, subtitle: { type: 'string' },
+    html:{type:'string',description:'For custom: original HTML/SVG layout. Each chapter i needs a button with data-wds-target="{{target:i}}" and data-wpx-action="go-id:{{target:i}}". Tokens bind to stable page IDs.'},css:{type:'string',description:'Custom CSS scoped under .wds-nav-custom. May include original keyframes, hover, focus and reduced-motion rules.'},
+    chapters: { type: 'array', minItems: 2, maxItems: 24, items: { type: 'object', properties: { title: { type: 'string' }, slideIndex: { type: 'integer' }, description: { type: 'string' }, color: { type: 'string' } }, required: ['title', 'slideIndex'], additionalProperties: false } } }, required: ['chapters'], additionalProperties: false,
 };
 
 const ANIM_PARAMS = {
@@ -197,11 +214,50 @@ function fn(name, description, properties, required = []) {
 }
 
 export const TOOL_DEFINITIONS = [
-  fn('deck_set_navigation', '把指定目录页替换成花瓣展开 / 知识轨道 / 章节阶梯，章节点击可进入目标页，放映时选中图形放大过渡。仅替换指定页，不增加页数。', { index: INDEX_PARAM, ...NAV_SCHEMA.properties }, ['chapters']),
-  fn('deck_generate_image', '使用用户手动开启并配置的生图服务生成一张图片，保存为工程本地素材并自动插入指定页面。关闭时不可调用；不要通过设置自行开启。', { prompt: { type: 'string', description: '详细画面与构图要求，风格需匹配演示；文字与公式保留在可编辑元素中。' }, index: INDEX_PARAM, alt: { type: 'string' }, ...XYWH }, ['prompt']),
+  fn('deck_insert_3d','Create or update an interactive Three.js structure using the built-in offline engine and OrbitControls. Use agent_parallel first for independent geometry, presentation and validation work. Pass a declarative scene or custom code; custom code requires full permission. Mouse drag rotates, wheel zooms, right-drag pans; one/two-finger gestures work on touch. Supply elementId to replace an existing component, otherwise insert on index/current page. No CDN imports.',{
+    scene:{type:'object',description:'Declarative scene: {background,camera:{position:[x,y,z],target:[x,y,z],fov},autoFit,controls:{enableRotate,enableZoom,enablePan,autoRotate},lights:[{type:"ambient"|"directional"|"point"|"hemisphere"|"spot",color,intensity,position}],objects:[{id,type:"mesh"|"group"|"line"|"points"|"arrow"|"axes"|"grid",geometry:{type:"box"|"sphere"|"cylinder"|"cone"|"torus"|"torusKnot"|"plane"|"circle"|"ring"|"icosahedron"|"capsule"|"lathe"|"tube"|"polyline",args:[constructor numbers],points:[[x,y,z]]},material:{type:"standard"|"basic"|"normal"|"phong",color,roughness,metalness,opacity,wireframe},position:[x,y,z],rotation:[radians,radians,radians],scale:number|[x,y,z],children:[]}]}',additionalProperties:true},
+    code:{type:'string',description:'Optional synchronous scene factory BODY, executed with built-in THREE, scene, camera, renderer, controls, root and host. Full permission required. Add geometry to root/scene; return {update(timeSeconds,deltaSeconds),dispose()} if needed. Runtime owns renderer/RAF. No import/CDN.'},
+    label:{type:'string',description:'Accessible label in the user\'s language.'},elementId:ELEMENT_ID,index:INDEX_PARAM,...XYWH,
+  }),
+  fn('deck_get_3d_state','Read actual built-in 3D rendering status, camera and interaction state. Check errors and WebGL availability after inserting/changing a structure; combine with deck_capture_slide to inspect rendered pixels.'),
+  fn('deck_capture_slide','Render the actual unsaved page to a PNG image for visual inspection. Returns the image plus element IDs, measured bounds, font sizes and overflow indicators. Use after creating or changing layouts; inspect, make targeted pixel adjustments, and capture again. Does not change content or create a version. The runtime sends the image to vision-capable models.',{
+    index:INDEX_PARAM,elementId:ELEMENT_ID,scale:{type:'number',minimum:.25,maximum:1.5,description:'Image pixels per slide pixel. Default 0.75; use 1–1.5 for a detail crop.'},
+    region:{type:'object',properties:{x:{type:'number'},y:{type:'number'},w:{type:'number'},h:{type:'number'}},required:['x','y','w','h'],additionalProperties:false},
+  }),
+  fn('deck_set_navigation', 'Design a chapter navigation page without adding pages. Prefer original custom HTML/SVG/CSS chosen for the content; petals/orbit/steps are optional presets. Stable page ID links survive reordering. Inspect the result with deck_capture_slide.', { index: INDEX_PARAM, ...NAV_SCHEMA.properties }, ['chapters']),
+  fn('deck_generate_image', '使用用户手动开启的生图服务生成配图并插入页面。根据构图自主选择参数，优先 GPT 图像模型。关闭时不可调用或自行开启。', {
+    prompt: { type: 'string', description: '画面、构图、风格、配色和留白要求；文字与公式保留为可编辑元素。' },
+    model: { type: 'string', description: '可选；仅可使用用户指定或已发现的生图模型，省略时自动选择。' },
+    size: { type: 'string', enum: ['auto','1024x1024','1536x1024','1024x1536'], description: '根据插图区域选择横版、竖版或方形。' },
+    quality: { type: 'string', enum: ['auto','low','medium','high'] },
+    background: { type: 'string', enum: ['auto','opaque','transparent'], description: 'GPT 图像模型可用，透明背景配合 PNG 或 WebP。' },
+    outputFormat: { type: 'string', enum: ['png','jpeg','webp'], description: 'GPT 图像模型可用。' },
+    outputCompression: { type: 'integer', minimum: 0, maximum: 100, description: '仅 GPT 图像模型的 JPEG / WebP 可用。' },
+    index: INDEX_PARAM, alt: { type: 'string' }, ...XYWH,
+  }, ['prompt']),
   fn('deck_insert_math', '用 LaTeX 排版公式，保留源码。elementId 指定时更新已有公式，否则插入当前页。公式必须使用此工具或 KaTeX，不要用普通文字模拟。', {latex:{type:'string'},elementId:ELEMENT_ID,fontSize:{type:'number'},...XYWH}, ['latex']),
-  fn('deck_insert_svg', '插入或更新安全的完整 SVG 矢量图解，适用于知识讲解、流程、几何和必要绘画。保留源码以便编辑。', {svg:{type:'string'},elementId:ELEMENT_ID,...XYWH}, ['svg']),
+  fn('deck_insert_svg', 'Insert or update a complete editable SVG illustration with subject-specific geometry, meaningful internal detail, readable annotations and complete local defs. For a new detailed illustration or substantial redraw, dispatch independent SVG workers with agent_parallel first, supplying shared viewBox/bounds, anchors, palette/fonts and unique ID prefixes. Integrate complete returned source and inspect the sanitized page with deck_capture_slide when vision is available. Supply full SVG with xmlns/viewBox; no truncated paths, placeholder diagrams, scripts, foreignObject, external assets, embedded CSS, filters or SMIL. Use supported presentation attributes, local defs/markers/gradients/patterns; use deck tools for animation and LaTeX. elementId updates the existing asset; otherwise inserts on the current page. Preserve source and layer IDs for later edits.', {svg:{type:'string',description:'Complete well-formed standalone SVG source, including all semantic geometry, labels, required defs and closing root. Maximum 1,000,000 characters. Match viewBox to destination aspect ratio; use unique IDs and readable fonts.'},elementId:ELEMENT_ID,...XYWH}, ['svg']),
   fn('fonts_list', '检测本机可用字体，并按内容推荐标题/正文组合。', {text:{type:'string'},profile:{type:'string',enum:['auto','academic','business','editorial','technical','playful']}}),
+  fn('type_presets', 'List the artistic type presets (script Latin faces, CJK calligraphic faces, outline/neon/gold/chrome effects, texture fills, shadows, animated fills, and hanzi stroke animation). Call this before deck_insert_type when you need ids and defaults; returns each preset id, group, label, hint, font and whether it animates or needs hanzi stroke data.',{
+    group:{type:'string',enum:TYPE_GROUPS.map(g=>g.id),description:'Optional filter.'},
+  }),
+  fn('deck_insert_type', 'Insert or update an artistic type composition as one editable element: Latin script/calligraphic faces, CJK calligraphic faces, outline/neon/gold/chrome/emboss/3D/glitch effects, SVG texture fills, layered shadows, animated gradient/shimmer/liquid fills, per-character motion, and real hanzi stroke-order animation built from bundled 1024-grid stroke paths (no font or network needed at export). Animation replays when its page is shown. Pass preset (see type_presets) plus text and styling; elementId replaces an existing composition, otherwise it inserts on the current page. For stroke presets the stroke data is fetched and inlined automatically; unsupported characters fall back to plain text and are reported in missing. Solid gradient/shadow/texture effects are pure CSS on one element — do not build them from SVG paths.',{
+    preset:{type:'string',description:'Preset id from type_presets, e.g. script-swash, blackletter, didone, condensed, xingkai, lishu, seal, stele, outline, neon, gold, chrome, extrude3d, glitch, texture-grain, texture-halftone, shadow-long, fill-flow, fill-shimmer, motion-char-pop, stroke-draw, stroke-fill, stroke-radical, stroke-explode.'},
+    text:{type:'string',description:'The exact text to typeset, in the deck language.'},
+    font:{type:'string',description:'Font key from '+Object.keys(TYPE_FONTS).join(', ')+', or a raw CSS family list.'},
+    size:{type:'number',description:'Font size in slide px (1920x1080 canvas). Default from preset.'},
+    weight:{type:'number',description:'Font weight 100–900.'},
+    color:{type:'string',description:'Primary color (hex or CSS color).'},
+    color2:{type:'string',description:'Secondary color: stroke, shadow, gradient or radical highlight depending on preset.'},
+    letterSpacing:{type:'number',description:'Letter spacing in em.'},
+    align:{type:'string',enum:['left','center','right']},
+    italic:{type:'boolean'},uppercase:{type:'boolean'},
+    stagger:{type:'number',description:'Per-character animation delay in seconds (motion-char-* presets).'},
+    strokeWidth:{type:'number',description:'Stroke width: outline px, sticker border px, or hanzi stroke weight (1–160).'},
+    duration:{type:'number',description:'One stroke draw duration in seconds (stroke-* presets).'},
+    loop:{type:'boolean',description:'Loop stroke animation; false plays once.'},
+    elementId:ELEMENT_ID,index:INDEX_PARAM,...XYWH,
+  }, ['preset','text']),
   fn('deck_auto_fonts', '按工程文字和风格自动选择本机字体，应用到各页文本。保留公式数学字体与 SVG 内部字形。', {profile:{type:'string',enum:['auto','academic','business','editorial','technical','playful']}}),
   fn('app_list_apis', '发现网页全部业务 API（工程、导入、文件、素材、时间线、设置、搜索、导出等），返回操作 ID、方法、参数和所需权限。', { filter: { type: 'string' } }),
   fn('app_call_api', '按操作 ID 调用 app_list_apis 中的业务接口。projectId 默认当前工程；query 是 URL 参数，body 是请求体。严格遵守操作要求的权限。导出/预览返回可点击链接。', {
@@ -271,6 +327,8 @@ export const TOOL_DEFINITIONS = [
     h: { type: 'number', description: '新高度 px。' },
     x: { type: 'number', description: '新 x 坐标（可选）。' },
     y: { type: 'number', description: '新 y 坐标（可选）。' },
+    absolute:{type:'boolean',description:'true 时整体缩放 HTML 元素及其内部文字/SVG/图形到指定绝对像素大小；false 仅调整布局容器。'},
+    keepRatio:{type:'boolean',description:'整体缩放时默认保持比例，以 w 为准；false 可独立设置宽高。'},
   }, ['w', 'h']),
 
   /* ---------- 修改：插入 / 删除 ---------- */
@@ -339,9 +397,12 @@ export const TOOL_DEFINITIONS = [
             items: {
               type: 'object',
               properties: {
-                type: { type: 'string', enum: ['text', 'shape', 'image', 'html', 'math', 'svg'], description: '元素类型；math/svg 直接渲染在制作页面中。' },
+                type: { type: 'string', enum: ['text', 'shape', 'image', 'html', 'math', 'svg','three'], description: 'Element type. math/svg/three render directly on the authored page; three uses the built-in offline Three.js engine.' },
+                scene:{type:'object',description:'three: declarative scene specification. Same contract as deck_insert_3d.',additionalProperties:true},
+                code:{type:'string',description:'three: custom Three.js scene factory body; requires full permission.'},
+                label:{type:'string',description:'three: accessible structure label.'},
                 latex: { type: 'string', description: 'math 类型的 LaTeX 源码，不含分隔符。' },
-                svg: { type: 'string', description: 'svg 类型的完整 SVG 源码。' },
+                svg: { type: 'string', description: 'svg: complete detailed standalone SVG source with xmlns/viewBox, semantic layers, all local defs, precise geometry and readable annotations. Use independent SVG workers for substantial illustrations, then integrate their full outputs. No placeholders or omitted paths.' },
                 x: { type: 'number' }, y: { type: 'number' }, w: { type: 'number' }, h: { type: 'number' },
                 text: { type: 'string', description: 'text 类型：纯文本。' },
                 html: { type: 'string', description: 'text/html 类型：富文本或任意 HTML。' },
@@ -401,10 +462,11 @@ export const TOOL_DEFINITIONS = [
     all: { type: 'boolean', description: '是否应用到全部页（默认 false=当前页）。' },
     duration: { type: 'number', description: '切换时长 ms，100–5000（默认 900）。' },
   }, ['name', 'code']),
+  fn('deck_get_timeline','读取编辑器当前完整时间线，包括尚未保存的轨道、HTML / SVG、CSS 与关键帧。修改时间线前先调用，以保留其它轨道。'),
   fn('deck_set_timeline', '设置全局动画时间线：独立于分页、可跨页、多轨道、关键帧；可做屏闪/飞入飞出/贯穿全片的元素动效。HTML 自由度优先，不要用 PPT 的思维限制效果。', {
     timeline: {
       type: 'object',
-      description: '完整时间线对象：{duration, pageDuration, followPages, pages:[{index,start,duration}], tracks:[{id,name,selector,keyframes:[{t,props:{opacity,transform,filter,clipPath}}]}]}。selector 可用 [data-wpx-el="…"]、[data-wpx-tl="flash"] 或任意 CSS 选择器。',
+      description: '完整时间线对象：{duration, pageDuration, followPages, pages:[{index,start,duration}], tracks:[{id,name,kind:"overlay",selector:"[data-wpx-tl=\\"unique-id\\"]",html:"<div>任意 HTML / SVG</div>",css:"可选 CSS",keyframes:[{t,props:{opacity,x,y,scale,rotate,transform,filter,clipPath}}]}]}。自定义特效通过 html/css 自动创建图层，编辑、放映和导出均保留。已有元素仅需 selector。先读取当前时间线并保留其它轨道。',
       additionalProperties: true,
     },
   }, ['timeline']),
@@ -1116,7 +1178,7 @@ async function execResizeElement(ctx, params) {
   const y = toNum(params.y);
   if (x !== null) payload.x = clamp(x, -1920, 3840);
   if (y !== null) payload.y = clamp(y, -1080, 2160);
-  const res = await bridgeCall(ctx, 'resizeElement', payload);
+  const res = await bridgeCall(ctx,params.absolute?'setAbsoluteSize':'resizeElement', {...payload,keepRatio:params.keepRatio});
   const opId = commitOp(ctx, res, '调整尺寸');
   return { ok: true, elementId: id, opId, summary: `已调整 ${id} 尺寸为 ${Math.round(payload.w)}×${Math.round(payload.h)}` };
 }
@@ -1215,8 +1277,80 @@ async function execInsertHtml(ctx, params) {
   return { ok: true, elementId: res && res.elementId, opId, summary: '已插入自定义 HTML 块' };
 }
 
-async function execRich(ctx, params, type) {
-  const math = type === 'math', source = String(math ? params.latex || '' : params.svg || '');
+/**
+ * 艺术字：把 type-kit 生成的 HTML 落到当前页。
+ * 笔画类预设先从 /api/hanzi 取路径再内联，导出文件因此不依赖字体或网络。
+ */
+/** 读取某页实际渲染的背景色，供配色对比判断用；读不到返回 null。 */
+function pageBackground(ctx, index) {
+  try {
+    const doc = getEditor(ctx)?.iframe?.contentDocument;
+    if (!doc) return null;
+    const slides = Array.from(doc.querySelectorAll('.wpx-slide, .slide, [data-slide]'));
+    const target = slides[index != null ? Number(index) : 0] || slides.find((s) => s.classList.contains('is-active')) || slides[0];
+    if (!target) return null;
+    const read = (node) => {
+      const cs = node.ownerDocument.defaultView.getComputedStyle(node);
+      const image = cs.backgroundColor;
+      return image && image !== 'rgba(0, 0, 0, 0)' ? image : null;
+    };
+    return read(target) || (target.parentElement && read(target.parentElement)) || null;
+  } catch { return null; }
+}
+
+async function execInsertType(ctx, params) {
+  const preset = typePreset(params.preset);
+  if (!preset) return FAIL(`未知预设 "${params.preset}"，请先调用 type_presets。`);
+  const text = String(params.text || '').trim();
+  if (!text) return FAIL('需要 text。');
+  let strokes = {};
+  let missing = [];
+  if (preset.split === 'stroke') {
+    try {
+      strokes = await fetchStrokes(text);
+      missing = Array.from(text).filter((c) => c.trim() && !strokes[c]);
+    } catch (err) {
+      return FAIL('笔画数据不可用：' + err.message + '。可运行 node scripts/pack-hanzi.mjs 生成后重试。');
+    }
+  }
+  let built;
+  try {
+    // 深墨色预设落在深色页上会看不见：未显式指定颜色时按页面底色自动取浅色版本
+    const spec = params.color ? { ...params, colorLocked: true } : adaptToBackground(
+      { ...params, preset: preset.id }, pageBackground(ctx, params.index),
+    );
+    built = buildTypeKit({ ...spec, preset: preset.id }, { strokes });
+  } catch (err) {
+    return FAIL('生成艺术字失败：' + err.message);
+  }
+  const w = clamp(Number(params.w) || built.w, 20, 3840);
+  const h = clamp(Number(params.h) || built.h, 20, 2160);
+  const x = clamp(Number(params.x) || 160, -1920, 3840);
+  const y = clamp(Number(params.y) || 160, -1080, 2160);
+  const label = '艺术字 · ' + preset.label;
+  if (params.elementId) {
+    const html = built.html.replace('<div ', `<div data-wtk-spec="${escapeHtml(JSON.stringify(built.spec))}" `, 1);
+    const prior = await bridgeCall(ctx, 'getElementHtml', { elementId: params.elementId }).catch(() => null);
+    if (prior && !/data-wds-type/.test(prior.html || '')) return FAIL('目标不是艺术字组件；请插入新元素或选择已有艺术字。');
+    const result = await bridgeCall(ctx, 'setText', { elementId: params.elementId, html });
+    return { ok: true, elementId: params.elementId, preset: preset.id, opId: commitOp(ctx, result, label), summary: '已更新' + label };
+  }
+  if (params.index !== undefined) {
+    const state = await safeState(ctx), index = Number(params.index);
+    if (!Number.isInteger(index) || index < 0 || index >= (state?.slides?.length || 0)) return FAIL('艺术字目标页无效。');
+    await bridgeCall(ctx, 'go', { index, opts: { instant: true } });
+  }
+  const html = built.html.replace('<div ', `<div data-wtk-spec="${escapeHtml(JSON.stringify(built.spec))}" `, 1);
+  const result = await bridgeCall(ctx, 'insertElement', { type: 'html', html, x, y, w, h });
+  return {
+    ok: true, elementId: result.elementId, preset: preset.id, opId: commitOp(ctx, result, label),
+    animated: Boolean(preset.css), strokeData: preset.split === 'stroke',
+    missing,
+    summary: '已插入' + label + (missing.length ? '；以下字符没有笔画数据，已作为普通文字显示：' + missing.join(' ') : ''),
+  };
+}
+
+async function execRich(ctx, params, type) {  const math = type === 'math', source = String(math ? params.latex || '' : params.svg || '');
   const size = clamp(Number(params.fontSize) || 52, 12, 200);
   const html = math
     ? `<link rel="stylesheet" href="/app/vendor/katex/katex.min.css" data-wds-math><div data-wds-latex="${escapeHtml(source)}" style="font-size:${size}px;display:flex;align-items:center;justify-content:center;width:100%;height:100%;overflow:auto">${renderFormula(source,true)}</div>`
@@ -1227,6 +1361,24 @@ async function execRich(ctx, params, type) {
   }
   const result = await bridgeCall(ctx,'insertElement',{type:'html',html,x:clamp(Number(params.x) || 160,-1920,3840),y:clamp(Number(params.y) || 160,-1080,2160),w:clamp(Number(params.w) || 1200,20,3840),h:clamp(Number(params.h) || (math?220:600),20,2160)});
   return {ok:true,elementId:result.elementId,opId:commitOp(ctx,result,math?'插入公式':'插入图解'),summary:math?'已插入 LaTeX 公式':'已插入 SVG 图解'};
+}
+async function execThree(ctx,params,opts={}) {
+  if(!params.scene&&!params.code)return FAIL('请提供 scene 场景结构或自定义 Three.js code。');
+  if(params.code&&normalizePermission(opts.permission)!=='full')return FAIL('自定义 Three.js 代码需要完全访问权限；可编辑权限可以使用声明式 scene。');
+  const html=threeMarkup(params);
+  if(params.elementId){
+    const prior=await bridgeCall(ctx,'getElementHtml',{elementId:params.elementId});
+    if(!/\bdata-wds-three(?:[\s=>])/.test(prior.html||''))return FAIL('目标不是 3D 组件；请插入新组件或选择已有 3D。');
+    const result=await bridgeCall(ctx,'setText',{elementId:params.elementId,html});
+    return {ok:true,elementId:params.elementId,opId:commitOp(ctx,result,'更新 3D 结构'),summary:'已更新交互式 3D 结构'};
+  }
+  if(params.index!==undefined){
+    const state=await safeState(ctx),index=Number(params.index);
+    if(!Number.isInteger(index)||index<0||index>=(state?.slides?.length||0))return FAIL('3D 组件目标页无效。');
+    await bridgeCall(ctx,'go',{index,opts:{instant:true}});
+  }
+  const result=await bridgeCall(ctx,'insertElement',{type:'html',html,x:clamp(toNum(params.x)??160,-1920,3840),y:clamp(toNum(params.y)??160,-1080,2160),w:clamp(toNum(params.w)??1200,80,3840),h:clamp(toNum(params.h)??700,80,2160)});
+  return {ok:true,elementId:result.elementId,opId:commitOp(ctx,result,'插入 3D 结构'),summary:'已插入交互式 3D 结构；编辑时点击「操控 3D」，放映时直接拖动'};
 }
 async function execAutoFonts(ctx,params) {
   const serialized=await bridgeCall(ctx,'serialize',{}), html=typeof serialized==='string'?serialized:serialized.html;
@@ -1325,12 +1477,12 @@ function animAttrsOf(anim) {
 
 function elementHtmlOf(item, seed, index) {
   const e = item && typeof item === 'object' ? item : {};
-  const richType = ['math', 'svg'].includes(e.type) ? e.type : null;
+  const richType = ['math', 'svg','three'].includes(e.type) ? e.type : null;
   const type = richType ? 'html' : ['text', 'shape', 'image', 'html'].includes(e.type) ? e.type : 'text';
   const x = Number(e.x) || 0;
   const y = Number(e.y) || 0;
   const w = Number(e.w) || (type === 'shape' ? 400 : 600);
-  const h = Number(e.h) || (type === 'shape' ? 240 : 180);
+  const h = Number(e.h) || (richType==='three'?700:type === 'shape' ? 240 : 180);
   const style = {
     left: x + 'px',
     top: y + 'px',
@@ -1375,6 +1527,7 @@ function elementHtmlOf(item, seed, index) {
   }
   const inner = richType === 'math' ? formulaMarkup(e.latex, true)
     : richType === 'svg' ? `<div data-wds-svg="${escapeAttr(e.svg)}" style="width:100%;height:100%">${sanitizeSvg(e.svg)}</div>`
+    : richType === 'three' ? threeMarkup(e)
     : e.html != null && String(e.html).trim() ? String(e.html) : escapeHtml(e.text || '');
   return `<div ${common}${animAttrsOf(e.anim)}>${inner}</div>`;
 }
@@ -1396,10 +1549,11 @@ function sectionHtmlOf(slide, index, dir, ids) {
   return `<section class="wpx-slide" data-id="${ids[index]}" data-name="${escapeAttr(name)}" data-transition="${escapeAttr(transition)}"${duration ? ` data-transition-duration="${duration}"` : ''} data-bg="${escapeAttr(bg)}"${fx}><div class="wpx-canvas">${inner}</div></section>`;
 }
 
-async function execCompose(ctx, params) {
+async function execCompose(ctx, params, opts={}) {
   const slides = Array.isArray(params && params.slides) ? params.slides : [];
   if (!slides.length) return FAIL('需要 slides 数组（至少 1 页）。');
   if (slides.length > 24) return FAIL('一次最多生成 24 页；请拆成两次。');
+  if(normalizePermission(opts.permission)!=='full'&&slides.some(s=>s.elements?.some(e=>e.type==='three'&&e.code)))return FAIL('自定义 Three.js 代码需要完全访问权限。');
   const { raw } = await resolveDeckCapabilities(ctx);
   if (raw) return FAIL('这是导入的网页原稿，页结构由它自己的 HTML/JS 决定，不能整套重建。要生成新演示，请先在文件库「新建」一个空白工程；或在当前工程里只改现有页内容。');
 
@@ -1476,11 +1630,12 @@ async function execGenerateImage(ctx, params, opts = {}) {
   const projectId = getProject(ctx)?.id;
   if (!projectId) return FAIL('请先打开一个工程');
   const settings = await ctx.api.getSettings();
-  if (!settings.imageGeneration?.enabled) return FAIL('生图未开启，请由用户在「生图设置」中手动开启');
+  if (!settings.imageGeneration?.enabled) return FAIL('生图未开启，请由用户在「API 设置 → 生图」中手动开启');
   const state = await safeState(ctx), index = params.index ?? state?.current ?? 0;
   if (!state?.slides?.[index]) return FAIL('图片目标页面不存在');
   const targetId = state.slides[index].id;
-  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generate-image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: params.prompt }), signal: opts.signal });
+  const payload = Object.fromEntries(['prompt','model','size','quality','background','outputFormat','outputCompression'].filter((key) => params[key] !== undefined).map((key) => [key, params[key]]));
+  const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generate-image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: opts.signal });
   const data = await response.json();
   if (!response.ok) return FAIL(data.error?.message || '生图失败');
   opts.signal?.throwIfAborted();
@@ -1641,14 +1796,14 @@ async function execSetTimeline(ctx, params) {
   const res = await bridgeCall(ctx, 'setTimeline', { timeline });
   const project = ctx.store.get().project;
   if (project && project.kind === 'raw') {
-    try {
-      await fetch('/api/projects/' + encodeURIComponent(project.id) + '/timeline', {
+    const response=await fetch('/api/projects/' + encodeURIComponent(project.id) + '/timeline', {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ timeline }),
       });
-    } catch { /* ignore */ }
+    if(!response.ok)throw new Error('时间线保存失败：HTTP '+response.status);
   }
   const opId = commitOp(ctx, res, '设置动画时间线');
   await bridgeCall(ctx, 'timelineRefresh', {}).catch(() => {});
+  ctx.bus.emit('timeline:changed');
   return {
     ok: true,
     opId,
@@ -1785,6 +1940,7 @@ async function execSetElementAction(ctx, params) {
 }
 
 function commandAccess(name) {
+  if(name==='favorites.open')return 'blocked';
   if (/^(agent\.|app\.(toggleAgent|back))/.test(name)) return 'blocked';
   if (/^(file\.|project\.|templates\.|app\.(settings|reloadDeck)|insert\.html|element\.editHtml|design\.(css|js))/.test(name)) return 'full';
   return 'edit';
@@ -1811,6 +1967,11 @@ async function execAppRunCommand(ctx, params, opts = {}) {
   const access = commandAccess(name);
   if (access === 'blocked') return FAIL('会话控制不能递归调用；业务功能请使用 app_call_api。');
   if (permissionRank(opts.permission) < permissionRank(access)) return FAIL('命令需要「' + permissionLabel(access) + '」权限。');
+  if(name==='favorites.save'&&!String(params.payload?.name||'').trim())return FAIL('收藏元素需要 payload.name，请提供收藏名称。');
+  if(name==='favorites.insert'&&normalizePermission(opts.permission)!=='full'){
+    const {element}=await ctx.api.getFavoriteElement(params.payload?.favoriteId);
+    if(favoriteHasCode(element.html))return FAIL('该收藏包含自定义 Three.js 代码，需要完全访问权限；普通元素和声明式 3D 场景可在可编辑模式插入。');
+  }
   const res = await ctx.bus.runCommand(name, (params && params.payload) || {});
   const ok = !(res && res.ok === false);
   return { ok, name, result: res, summary: ok ? '已执行命令 ' + name : '命令失败：' + (res && res.error || '未知错误') };
@@ -1952,7 +2113,9 @@ async function execCallApi(ctx, params, opts) {
   const current = ctx.store.get().project?.id;
   const projectId = params.projectId || current;
   const body = params.body || {};
-  if (op.id === 'settings.write' && Object.hasOwn(body, 'imageGeneration')) return FAIL('生图只能由用户在「生图设置」中手动开启或修改。');
+  if(projectId===current&&op.id==='timeline.read')return {ok:true,...await bridgeCall(ctx,'getTimeline',{})};
+  if(projectId===current&&op.id==='timeline.write')return execSetTimeline(ctx,body);
+  if (op.id === 'settings.write' && Object.hasOwn(body, 'imageGeneration')) return FAIL('生图只能由用户在「API 设置 → 生图」中手动开启或修改。');
   if (op.id === 'files.write' && projectId === current) return execFileWrite(ctx, body);
   if (op.id === 'files.write' || op.id === 'files.read') {
     const filePath = normalizePath(body.path || params.query?.path || 'index.html');
@@ -2017,11 +2180,31 @@ async function execFilePatch(ctx, params) {
 }
 
 const EXECUTORS = {
+  deck_insert_3d:execThree,
+  deck_get_3d_state:async(ctx)=>{
+    const editor=getEditor(ctx);
+    let runtime=editor?.iframe?.contentWindow?.__WDS_THREE__;
+    if(!runtime&&editor?.bridge?.ready){await editor.bridge.call('ensureThree',{});runtime=editor.iframe?.contentWindow?.__WDS_THREE__;}
+    if(!runtime)return FAIL('3D 运行时尚未就绪，请重新加载画布或重启 BAT 服务。');
+    await runtime.refresh?.();return {ok:true,...runtime.getState()};
+  },
+  deck_capture_slide:async(ctx,params,opts)=>(await import('./visual-inspection.js')).captureSlide(ctx,params,opts),
   deck_set_navigation: execNavigation,
   deck_generate_image: execGenerateImage,
   deck_insert_math: (ctx,p)=>execRich(ctx,p,'math'),
   deck_insert_svg: (ctx,p)=>execRich(ctx,p,'svg'),
   deck_auto_fonts: execAutoFonts,
+  deck_insert_type: execInsertType,
+  type_presets: async (_ctx, p = {}) => {
+    const list = TYPE_PRESETS
+      .filter((preset) => !p.group || preset.group === p.group)
+      .map((preset) => ({
+        id: preset.id, group: preset.group, label: preset.label, hint: preset.hint,
+        font: preset.font, fontStack: TYPE_FONTS[preset.font]?.stack,
+        split: preset.split || 'none', animates: Boolean(preset.css), defaults: preset.defaults || {},
+      }));
+    return { ok: true, groups: TYPE_GROUPS, fonts: Object.fromEntries(Object.entries(TYPE_FONTS).map(([k, v]) => [k, v.label])), presets: list };
+  },
   fonts_list: async(_ctx,p)=>{const fonts=availableFonts(),r=recommendFonts({...p,fonts});return {ok:true,fonts,recommendation:{heading:r.heading,body:r.body,mono:r.mono,reason:r.reason}};},
   app_list_apis: execListApis,
   app_call_api: execCallApi,
@@ -2056,6 +2239,7 @@ const EXECUTORS = {
   deck_set_deck_js: execSetDeckJs,
   deck_set_custom_transition: execSetCustomTransition,
   deck_set_timeline: execSetTimeline,
+  deck_get_timeline: async(ctx)=>({ok:true,...await bridgeCall(ctx,'getTimeline',{})}),
   deck_apply_slide_html: execApplySlideHtml,
   deck_set_theme: execSetTheme,
   deck_set_deck_flags: execSetDeckFlags,
@@ -2109,6 +2293,8 @@ export function createToolExecutor(ctx) {
           if (operation && permissionRank(opts.permission) < permissionRank(operation.permission)) return FAIL('接口需要「' + permissionLabel(operation.permission) + '」权限。');
         }
         if (name === 'app_run_command' && permissionRank(opts.permission) < permissionRank(commandAccess(String(params.name || '')))) return FAIL('命令权限不足');
+        if(name==='app_run_command'&&params.name==='insert.three'&&normalizePermission(opts.permission)!=='full'&&params.payload?.code)return FAIL('自定义 Three.js 代码需要完全访问权限。');
+        if(normalizePermission(opts.permission)!=='full'&&((name==='deck_insert_3d'&&params.code)||(name==='deck_compose'&&params.slides?.some(s=>s.elements?.some(e=>e.type==='three'&&e.code)))))return FAIL('自定义 Three.js 代码需要完全访问权限；可编辑权限可以使用声明式 scene。');
         const projectId = mutationProject(ctx, name, params);
         if (projectId) await opts.beforeMutation?.(projectId);
         const result = await run(ctx, params, opts);

@@ -21,6 +21,7 @@ import * as contextMenu from './editor/context-menu.js';
 import * as timeline from './editor/timeline.js';
 import * as editor from './editor/editor.js';
 import * as agent from './agent/agent.js';
+import { initFavorites } from './editor/favorites.js';
 
 const THEME_KEY = 'wds:theme';
 
@@ -47,6 +48,7 @@ const ctx = {
 };
 
 window.__WDS__ = ctx;
+initFavorites(ctx);
 
 /* ---------- 主题 ---------- */
 function applyTheme(theme) {

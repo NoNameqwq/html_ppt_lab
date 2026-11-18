@@ -1,5 +1,5 @@
 /* Agent workspace UI, rebuilt independently from the editor's design system. */
-import { h, readFileAsDataURL } from '../core/dom.js';
+import { h, readFileAsDataURL, uid } from '../core/dom.js';
 import { icon } from '../ui/icons.js';
 import { createAgentLoop } from './loop.js';
 import { createThreadView } from './thread-view.js';
@@ -7,10 +7,11 @@ import { attachMarkdownActions } from './markdown.js';
 import { resolveActive, getProviders, loadSettings, openSettings } from './settings.js';
 import { PERMISSION_LEVELS, normalizePermission } from './tools.js';
 import { loadCatalog, openManager } from './skills.js';
-import { openSearchSettings } from './search-settings.js';
-import { openImageSettings } from './image-settings.js';
+import { createContextMeter } from './context-meter.js';
 import { ACCEPT, extractFile, fileExt } from './attachments.js';
 import { createVersionHistory } from './version-history.js';
+import { visibleProviderModels } from '../core/model-visibility.js';
+import { formatElapsed } from './generation-time.js';
 
 const read = (key, fallback = '') => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
 const write = (key, value) => { try { localStorage.setItem(key, value); } catch { /* storage disabled */ } };
@@ -24,6 +25,8 @@ export async function init(ctx) {
   let preparing = false, slashIndex = 0, slashItems = [], sessionKey = '';
   let permission = normalizePermission(read('wds:agent:permission', 'full'));
   let effort = read('wds:agent:effort', 'auto'), web = read('wds:agent:webSearch', '0') === '1';
+  let creativeMotion=read('wds:agent:creativeMotion','0')==='1';
+  let fastMode=read('wds:agent:fastMode','0')==='1', timerInterval=null;
   let appearance = ctx.store.get().ui.theme === 'dark' ? 'dark' : 'light';
   let fullscreen = false;
   const shell = h('div', { class: 'agw-shell', 'data-appearance': appearance });
@@ -32,6 +35,7 @@ export async function init(ctx) {
   const viewport = h('div', { class: 'agw-viewport' }, thread);
   const jump = iconButton('回到最新消息', 'arrow-down', () => { pinned = true; scroll(); }, 'agw-jump hidden'); viewport.append(jump);
   const status = h('div', { class: 'agw-status', role: 'status', 'aria-live': 'polite' });
+  const timer = h('span', { class:'agw-generation-timer hidden',role:'timer','aria-live':'off','aria-label':'生成用时' });
   const attachments = h('div', { class: 'agw-attachments hidden' }), queued = h('div', { class: 'agw-queue hidden' });
   const plan = h('details', { class: 'agw-plan hidden' }), planLabel = h('span'), planBody = h('div', { class: 'agw-plan-body' });
   plan.append(h('summary', {}, glyph('list-ordered', 14), planLabel, glyph('chevron-down', 12)), planBody);
@@ -40,13 +44,18 @@ export async function init(ctx) {
   const fileInput = h('input', { class: 'hidden', type: 'file', multiple: true, accept: ACCEPT });
   const modelLabel = h('span', { class: 'agw-model-label' }, '选择模型'), effortLabel = h('span', { class: 'agw-effort-label' });
   const model = h('button', { type: 'button', class: 'agw-model', 'aria-label': '选择模型' }, modelLabel, glyph('chevron-down', 13));
-  const effortButton=h('button',{type:'button',class:'agw-effort','aria-label':'选择思考强度',onClick:()=>showMenu(effortButton,'思考强度',['auto','low','medium','high'].map((id)=>({label:({auto:'自动',low:'低',medium:'中',high:'高'})[id],selected:effort===id,icon:'brain',action:()=>{effort=id;write('wds:agent:effort',id);loop.setOptions(toolOptions());refreshControls();}})))},glyph('brain',14),effortLabel);
+  const teamSettings=h('button',{type:'button',class:'agw-team-settings hidden','aria-label':'配置子代理模型',title:'配置设计、实现与检查模型',onClick:()=>safe(()=>settings())},glyph('cpu',14),h('span',{},'三模型协作'));
+  const effortButton=h('button',{type:'button',class:'agw-effort','aria-label':'选择思考强度',onClick:()=>showMenu(effortButton,'思考强度',['none','auto','low','medium','high','xhigh'].map((id)=>({label:({none:'关闭思考',auto:'自动',low:'低',medium:'中',high:'高',xhigh:'极高 · 子代理协作'})[id],description:id==='xhigh'?'设计、实现、检查，使用 API 设置中的三角色模型':id==='none'?'关闭扩展思考，需要模型接口支持':undefined,selected:effort===id,icon:'brain',action:()=>selectEffort(id)})))},glyph('brain',14),effortLabel);
   const access = iconButton('工作权限', 'shield', () => openPermissions()), plus = iconButton('添加附件与工具', 'plus', () => openAddMenu());
+  const motionButton=h('button',{type:'button',class:'agw-motion','aria-label':'华丽动效','aria-pressed':'false',onClick:()=>toggleCreativeMotion()},glyph('motion',15),h('span',{class:'agw-motion-label'},'华丽动效'));
+  const fastButton=h('button',{type:'button',class:'agw-fast','aria-label':'快速生成','aria-pressed':'false',onClick:()=>toggleFastMode()},glyph('zap',15),h('span',{},'快速生成'));
   const send = iconButton('发送消息', 'arrow-up', () => { if (loop.streaming) loop.stop(); else safe(() => submit()); }, 'agw-submit');
   const enqueue = iconButton('加入队列', 'arrow-up', () => safe(() => submit()), 'agw-enqueue hidden');
   const compose = h('div', { class: 'agw-compose' }, slash, attachments, input,
-    h('div', { class: 'agw-compose-tools' }, plus, access, h('span', { class: 'agw-spacer' }), model, effortButton, enqueue, send));
-  const composer = h('div', { class: 'agw-composer' }, plan, queued, status, compose, fileInput);
+    h('div',{class:'agw-compose-options'},motionButton,fastButton),
+    h('div', { class: 'agw-compose-tools' }, plus, access, h('span', { class: 'agw-spacer' }), model, teamSettings, effortButton, enqueue, send));
+  const contextMeter = createContextMeter();
+  const composer = h('div', { class: 'agw-composer' }, plan, queued, h('div',{class:'agw-status-row'},status,timer), compose, contextMeter.el, fileInput);
   const more = iconButton('对话选项', 'more-horizontal', () => openMore()), history = iconButton('对话历史', 'history', () => safe(openHistory));
   const create = iconButton('新对话', 'plus', () => safe(() => loop.newChat())), close = iconButton('收起对话', 'panel-right', () => setOpen(false));
   const maximize = iconButton('全屏对话', 'maximize', () => setFullscreen(!fullscreen));
@@ -57,7 +66,23 @@ export async function init(ctx) {
   const notify = (error) => ctx.toast.error(error?.message || String(error));
   const safe = (fn) => Promise.resolve().then(fn).catch(notify);
   const versions = createVersionHistory(ctx, { getLoop: () => loop, onRestored: () => { queue = []; renderQueue(); } });
-  const toolOptions = () => ({ permission, reasoningEffort: effort, webSearch: web });
+  const toolOptions = () => ({ permission, reasoningEffort: effort, webSearch: web,creativeMotion,fastMode });
+  function selectEffort(id) {
+    if(loop.streaming||loop.getState().loading){ctx.toast.warn('请等待当前任务结束或停止后再切换思考强度');return;}
+    effort=id;write('wds:agent:effort',id);loop.setOptions(toolOptions());refreshControls();
+  }
+  function toggleFastMode() {
+    if(loop.streaming||loop.getState().loading){ctx.toast.warn('请等待当前任务结束或停止后再切换快速生成');return;}
+    fastMode=!fastMode;write('wds:agent:fastMode',fastMode?'1':'0');loop.setOptions(toolOptions());refreshControls();
+  }
+  function updateTimer() {
+    const s=loop?.getState();timer.classList.toggle('hidden',!s?.streaming);
+    if(s?.streaming)timer.textContent='用时 '+formatElapsed(s.runElapsedMs+(s.runStartedAt?Date.now()-s.runStartedAt:0));
+  }
+  function toggleCreativeMotion(){
+    if(loop?.streaming||loop?.getState().loading){ctx.toast.warn('请等待当前任务结束或停止后再切换华丽动效');return;}
+    creativeMotion=!creativeMotion;write('wds:agent:creativeMotion',creativeMotion?'1':'0');loop.setOptions(toolOptions());refreshControls();
+  }
   let followFrame = null;
   function scroll() {
     if (!pinned || followFrame != null) return;
@@ -108,11 +133,17 @@ export async function init(ctx) {
     title.textContent = loop?.messages.find((m) => m.role === 'user' && !m.versionEvent)?.content || '新对话'; title.title = title.textContent;
   }
   function refreshControls() {
-    const active = resolveActive(ctx), cfg = loop?.getState(), efforts = { auto: '自动', low: '低', medium: '中', high: '高' };
+    const active = resolveActive(ctx), cfg = loop?.getState(), efforts = { none:'关闭',auto: '自动', low: '低', medium: '中', high: '高',xhigh:'极高' };
     modelLabel.textContent = active.model || '选择模型'; effortLabel.textContent = efforts[effort] || '自动';
+    model.classList.toggle('hidden',effort==='xhigh');teamSettings.classList.toggle('hidden',effort!=='xhigh');
     model.title = `${active.provider?.name || '配置模型'} · ${active.model || ''} · 思考强度：${efforts[effort] || '自动'}`;
     access.replaceChildren(glyph(permission === 'read' ? 'lock' : 'shield', 17)); access.title = '工作权限：' + (PERMISSION_LEVELS.find((p) => p.id === permission)?.label || '完全访问'); access.dataset.permission = permission;
     const running = !!loop?.streaming;
+    effortButton.disabled=running||!!cfg?.loading;
+    fastButton.classList.toggle('is-on',fastMode);fastButton.setAttribute('aria-pressed',String(fastMode));fastButton.disabled=running||!!cfg?.loading;
+    fastButton.title='快速生成'+(fastMode?'已开启':'已关闭')+'：减少重复复核和可选润色，保留必要检查。思考强度可单独设置。';
+    motionButton.classList.toggle('is-on',creativeMotion);motionButton.setAttribute('aria-pressed',String(creativeMotion));motionButton.disabled=running||!!cfg?.loading;
+    motionButton.title='华丽动效'+(creativeMotion?'已开启':'已关闭')+'：'+(creativeMotion?'创作时使用切换、元素动画、时间线和背景设计，丰富 SVG 与 3D 表现。':'开启后强化动效与视觉创作。');
     send.replaceChildren(glyph(running ? 'stop' : 'arrow-up', running ? 13 : 18)); send.setAttribute('aria-label', running ? '停止生成' : '发送消息'); send.title = running ? '停止生成' : '发送消息'; send.classList.toggle('is-stop', running);
     send.disabled = preparing || !!cfg?.loading || (!running && !input.value.trim() && !files.length); enqueue.classList.toggle('hidden', !running || !input.value.trim());
     input.placeholder = running ? '补充需求，Enter 加入队列' : '与 Agent 一起创作'; context();
@@ -147,18 +178,19 @@ export async function init(ctx) {
       permission = p.id; write('wds:agent:permission', p.id); loop.setOptions(toolOptions()); refreshControls();
     } })));
   }
-  async function settings() {
-    await openSettings(ctx, { getSkills: () => loop.skills, onChangeSkills: (ids) => loop.setSkills(ids), skillsCatalog: await loadCatalog(ctx) });
-    await loadSettings(ctx, { force: true }); refreshControls();
+  async function settings(section = 'chat') {
+    await openSettings(ctx, { section, getSkills: () => loop.skills, onChangeSkills: (ids) => loop.setSkills(ids), skillsCatalog: await loadCatalog(ctx) });
+    await loadSettings(ctx, { force: true }); loop.refreshContext(); refreshControls();
   }
   function openMore() {
     const expanded = panel.dataset.expanded === 'true';
     showMenu(more, '对话', [
       { label: '版本历史', description: '查看工程快照与对话回退', icon: 'history', action: () => versions.open() },
-      { label: '模型设置', icon: 'settings', action: settings },
+      { label: 'API 设置', description: '对话模型 · 联网搜索 · 生图', icon: 'settings', action: settings },
       { label: '设计技能', icon: 'sparkles', action: async () => openManager(ctx, { catalog: await loadCatalog(ctx), enabled: loop.skills, onChange: (ids) => loop.setSkills(ids) }) },
-      { label: '生图设置', icon: 'image', action: () => openImageSettings(ctx) },
-      { label: '联网搜索设置', icon: 'globe', action: () => openSearchSettings(ctx) }, { divider: true },
+      {label:creativeMotion?'关闭华丽动效':'开启华丽动效',description:'切换 · 动画 · 时间线 · 背景设计，强化 SVG 与 3D 创意',icon:'motion',selected:creativeMotion,action:toggleCreativeMotion},
+      {label:fastMode?'关闭快速生成':'开启快速生成',description:'减少重复复核，保留必要检查',icon:'zap',selected:fastMode,action:toggleFastMode},
+      { divider: true },
       { label: expanded ? '恢复侧栏宽度' : '展开阅读', icon: 'maximize', action: () => { panel.dataset.expanded = String(!expanded); setWidth(expanded ? 500 : Math.min(820, innerWidth - 32)); } },
       { label: fullscreen ? '退出全屏对话' : '全屏对话', icon: fullscreen ? 'minimize' : 'maximize', action: () => setFullscreen(!fullscreen) },
       { label: appearance === 'dark' ? '切换浅色主题' : '切换深色主题', description:'与编辑器同步', icon:appearance==='dark'?'sun':'moon', action:()=>ctx.bus.runCommand('app.toggleTheme') },
@@ -166,9 +198,7 @@ export async function init(ctx) {
         const text = loop.messages.filter((m) => m.role !== 'tool').map((m) => `## ${m.role === 'user' ? '你' : 'Agent'}\n\n${m.content || ''}`).join('\n\n');
         const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' })); const a = h('a', { href: url, download: 'WebDeck-对话.md' }); a.click(); setTimeout(() => URL.revokeObjectURL(url), 3000);
       } },
-      { label: '上下文用量', icon: 'info', action: () => {
-        const c = loop.getState().context; ctx.toast.info(c ? `上下文约 ${Math.round(c.tokens / 1000)}k / ${Math.round(c.limit / 1000)}k，${c.folded || 0} 条早期记录已整理为记忆。原文完整保留。` : '开始对话后可查看用量');
-      } },
+      { label: '上下文用量', icon: 'info', action: () => contextMeter.open() },
     ]);
   }
   async function openHistory() {
@@ -179,9 +209,10 @@ export async function init(ctx) {
   function openAddMenu() {
     showMenu(plus, '添加与工具', [
       { label: '添加图片或文档', description: 'PDF · Word · PPT · Markdown', icon: 'paperclip', action: () => fileInput.click() },
+      { label: '收藏元素', description: '从跨工程收藏库添加参考素材', icon: 'star', action: () => ctx.bus.runCommand('favorites.open',{mode:'chat'}) },
       { label: '导入 PPT 或网页', icon:'import',action:()=>ctx.bus.runCommand('file.import') },
       { label: '自定义模板',icon:'layout',action:()=>ctx.bus.runCommand('templates.manage') },
-      { label: '生图设置', description: ctx.store.get().settings.imageGeneration?.enabled ? '已开启 · 可自动生成配图' : '未开启 · 手动配置后使用', icon: 'image', action: () => openImageSettings(ctx) },
+      { label: 'API 设置', description: '对话、搜索与生图服务', icon: 'settings', action: settings },
       { label: web ? '关闭联网搜索' : '开启联网搜索', selected: web, icon: 'globe', action: () => { web = !web; write('wds:agent:webSearch', web ? '1' : '0'); loop.setOptions(toolOptions()); refreshControls(); } },
       { label: '查看全部应用命令', icon: 'terminal', action: () => { input.value = '/'; input.focus(); grow(); updateSlash(); } },
     ]);
@@ -190,11 +221,13 @@ export async function init(ctx) {
     const active = resolveActive(ctx), providers = getProviders(ctx).filter((p) => p.keySet);
     if (!providers.length) { safe(settings); return; } const items = [];
     for (const p of providers) {
+      const models = visibleProviderModels(p); if (!models.length) continue;
       items.push({ heading: p.name });
-      for (const m of p.models.length ? p.models : [{ id: p.model }]) if (m.id) items.push({ label: m.name || m.id, selected: active.providerId === p.id && active.model === m.id, icon: 'cpu', action: () => { loop.setProvider(p.id, m.id); refreshControls(); } });
+      for (const m of models) items.push({ label: m.name || m.id, selected: active.providerId === p.id && active.model === m.id, icon: 'cpu', action: () => { loop.setProvider(p.id, m.id); refreshControls(); } });
     }
+    if (!items.length) items.push({ heading: '暂无显示的模型，请在 API 设置中勾选' });
     items.push({ divider: true }, { heading: '思考强度' });
-    for (const [id, label] of [['auto', '自动'], ['low', '低'], ['medium', '中'], ['high', '高']]) items.push({ label, selected: effort === id, icon: 'brain', action: () => { effort = id; write('wds:agent:effort', id); loop.setOptions(toolOptions()); refreshControls(); } });
+    for (const [id, label] of [['none','关闭思考'],['auto', '自动'], ['low', '低'], ['medium', '中'], ['high', '高'],['xhigh','极高 · 子代理协作']]) items.push({ label, selected: effort === id, icon: 'brain', action: () => selectEffort(id) });
     items.push({ divider: true }, { label: '配置模型…', icon: 'settings', action: settings }); showMenu(model, '模型', items);
   });
   function renderFiles() {
@@ -208,7 +241,6 @@ export async function init(ctx) {
   }
   async function addFiles(incoming) {
     for (const source of incoming) {
-      if (files.length >= 6) { ctx.toast.warn('最多添加 6 个附件'); break; }
       if (source.size > 30 * 1024 * 1024) { ctx.toast.warn(source.name + ' 超过 30MB'); continue; }
       const isImage = source.type.startsWith('image/');
       if (!isImage && !ACCEPT.split(',').includes('.' + fileExt(source.name))) { ctx.toast.warn('不支持该文件类型：' + source.name); continue; }
@@ -237,8 +269,8 @@ export async function init(ctx) {
     if (preparing || loop.getState().loading) return;
     if (files.some((f) => f.status === 'reading')) { ctx.toast.warn('附件还在读取中'); return; }
     if (files.some((f) => f.status === 'error')) { ctx.toast.warn('请先移除读取失败的附件'); return; }
-    const text = input.value.trim(); if (!text && !files.length) return; const active = resolveActive(ctx);
-    if (!active.providerId || !active.model || !active.provider?.keySet) { safe(settings); return; }
+    const text = input.value.trim(); if (!text && !files.length) return;
+    if(!loop.validateConfiguration().ok)return;
     preparing = true; refreshControls(); const ready = files.slice(), images = [], assetPaths = [], docs = [];
     try {
       for (const f of ready) {
@@ -297,7 +329,7 @@ export async function init(ctx) {
     }
   }
   function newTurn(streaming, user = loop.messages.findLast((m) => m.role === 'user' && !m.versionEvent)) {
-    removeWelcome(); const view = createThreadView({ streaming, scroll, resume: () => loop.resume(), undo,
+    removeWelcome(); const view = createThreadView({ streaming, scroll, resume: () => loop.resume(), undo,getElapsedMs:()=>user?.generationTiming?.elapsedMs||0,
       openProject: (id)=>{setFullscreen(false);ctx.navigate('#/p/'+encodeURIComponent(id));},
       versions: () => safe(() => versions.open({ ids: Object.values(user?.versions?.[loop.projectId] || {}).filter((v) => typeof v === 'string') })) });
     if (user) view.el.dataset.turnId = user.turnId || user.id;
@@ -312,9 +344,9 @@ export async function init(ctx) {
       const msg = messages[i]; if (msg.synthetic) continue;
       if (msg.role === 'user') { turn?.finish({}, { replay: true }); turn?.disableResume(); turn = null; if (!msg.versionEvent) user = msg; userMessage(msg); }
       if (msg.role === 'assistant') {
-        turn ||= newTurn(false, user); turn.beginRound(); if (msg.reasoning) turn.setReasoning(msg.reasoning); if (msg.content) turn.setContent(msg.content);
+        turn ||= newTurn(false, user); turn.beginRound();if(msg.agentRole)turn.setRole(msg.agentRole); if (msg.reasoning) turn.setReasoning(msg.reasoning); if (msg.content) turn.setContent(msg.content);
         const results = new Map(); let j = i + 1; while (messages[j]?.role === 'tool') { results.set(messages[j].tool_call_id, messages[j]); j++; }
-        for (const c of msg.tool_calls || []) { const row = turn.ensureTool(c), result = results.get(c.id); if (result) { try { row.setResult(JSON.parse(result.content)); } catch { row.setMissing(); } } else row.setMissing(); }
+        for (const c of msg.tool_calls || []) { const row = turn.ensureTool(c), result = results.get(c.id); if (result) { try { row.setResult({...JSON.parse(result.content),images:result.images}); } catch { row.setMissing(); } } else row.setMissing(); }
         turn.finishRound(msg, { incomplete: msg.incomplete, aborted: msg.aborted }); i = j - 1;
       }
     }
@@ -325,16 +357,18 @@ export async function init(ctx) {
       h('button', { type: 'button', class: 'agw-text-button', onClick: () => { node.remove(); loop.resume(); } }, '继续处理'))); thread.append(node); scroll();
   }
   loop = createAgentLoop(ctx, {
+    onContext: (usage) => contextMeter.update(usage),
     onUserMessage(msg) { if (followFrame != null) cancelAnimationFrame(followFrame); followFrame = null; lastTurn?.disableResume(); activeTurn = null; lastTurn = null; plan.classList.add('hidden'); userMessage(msg); pinned = true; scroll(); },
-    onAssistantStart(meta) { activeTurn ||= newTurn(true); lastTurn = activeTurn; if (meta.continued) activeTurn.continuation({}); activeTurn.beginRound(); scroll(); },
+    onAssistantStart(meta) { activeTurn ||= newTurn(true); lastTurn = activeTurn; if (meta.continued) activeTurn.continuation({}); activeTurn.beginRound();if(meta.agentRole)activeTurn.setRole(meta.agentRole); scroll(); },
     onAssistantDelta(text) { activeTurn?.setContent(text); }, onReasoningDelta(text) { activeTurn?.setReasoning(text); scroll(); },
     onToolCalls(calls) { activeTurn?.setToolCalls(calls); }, onAssistantEnd(msg, meta) { activeTurn?.noteRoundEnd(msg, meta); },
     onToolStart(call) { lastTurn?.toolStart(call); }, onToolResult(call, result) { lastTurn?.toolResult(call, result); }, onContinuation(info) { activeTurn?.continuation(info); },
+    onParallelUpdate(event){(activeTurn||lastTurn)?.parallelUpdate(event);},
     onStatus(value) {
-      const labels = { thinking: '正在思考', streaming: '正在生成', tool: '正在操作', continuing: '继续生成中', reconnecting: '连接恢复中', compacting: '正在整理对话记忆', error: '已暂停', stopped: '已停止' };
+      const labels = { thinking: effort==='none'?'正在准备':'正在思考', streaming: '正在生成', tool: '正在操作', continuing: '继续生成中', reconnecting: '连接恢复中', compacting: '正在整理对话记忆', error: '已暂停', stopped: '已停止' };
       status.textContent = labels[value] || ''; status.dataset.state = value;
     },
-    onStreamingChange(running) { refreshControls(); if (!running && activeTurn) { activeTurn.finish(); activeTurn = null; } },
+    onStreamingChange(running) { clearInterval(timerInterval);timerInterval=running?setInterval(updateTimer,250):null;updateTimer();refreshControls(); if (!running && activeTurn) { activeTurn.finish(); activeTurn = null; } },
     onAborted() { activeTurn?.finish({}, { aborted: true }); }, onError(error) {
       if (activeTurn && !activeTurn.hasContent()) { activeTurn.el.remove(); lastTurn = null; }
       else activeTurn?.finish({}, { incomplete: true });
@@ -344,7 +378,7 @@ export async function init(ctx) {
       const key = draftKey(); if (sessionKey && sessionKey !== key) queue = []; sessionKey = key; renderQueue(); files = []; renderFiles(); plan.classList.add('hidden');
       input.value = read(key); grow(); replay(messages); refreshControls();
     },
-    onNeedSetup() { safe(settings); }, onBeforeResume() { thread.querySelectorAll('.agw-error').forEach((e) => e.remove()); activeTurn = lastTurn?.reopen() || null; pinned = true; },
+    onNeedSetup(message) { if(message)ctx.toast.warn(message);safe(settings); }, onBeforeResume() { thread.querySelectorAll('.agw-error').forEach((e) => e.remove()); activeTurn = lastTurn?.reopen() || null; pinned = true; },
     onVersionsChanged(msg) {
       const row = [...thread.querySelectorAll('.agw-user')].find((el) => el.dataset.messageId === msg.id);
       row?.querySelector('.agw-user-revert')?.classList.toggle('hidden', !msg.versions?.[loop.projectId]?.before);
@@ -355,6 +389,7 @@ export async function init(ctx) {
     onProjectDetached() { write(draftKey(), input.value); context(); },
     onSaveError() { status.textContent = '会话保存失败，本机备份已保留'; status.dataset.state = 'error'; },
     onDone(info) {
+      lastTurn?.refreshTiming();
       refreshControls();
       if (ctx.agentDeletedProjectId) { ctx.agentDeletedProjectId = null; ctx.navigate('#/'); return; }
       if (!info.aborted && !info.error && queue.length) { const item = queue.shift(); renderQueue(); safe(() => loop.send(item.text, item.images, item.options)); }
@@ -378,9 +413,18 @@ export async function init(ctx) {
     input.value = p.text || ''; grow(); return submit(p.brief);
   };
   ctx.bus.registerCommand('app.toggleAgent', () => setOpen(app.dataset.agent !== 'open')); ctx.bus.registerCommand('agent.toggle', () => setOpen(app.dataset.agent !== 'open'));
+  ctx.bus.registerCommand('agent.draft',(p={})=>{setOpen(true);input.value=p.text||'';grow();saveDraft();input.focus();input.setSelectionRange(input.value.length,input.value.length);return {ok:true};});
   ctx.bus.registerCommand('agent.send', (payload) => { safe(() => sendPayload(payload)); return { ok: true }; }); ctx.bus.registerCommand('agent.stop', () => loop.stop()); ctx.bus.registerCommand('agent.newChat', () => loop.newChat());
   ctx.bus.registerCommand('agent.toggleSkill', (p) => ({ ok: true, skills: loop.toggleSkill(typeof p === 'string' ? p : p?.id || p?.skillId) }));
-  ctx.bus.registerCommand('agent.openSettings', () => { safe(settings); return { ok: true }; }); ctx.bus.registerCommand('agent.openSearchSettings', () => { safe(() => openSearchSettings(ctx)); return { ok: true }; });
+  ctx.bus.registerCommand('backup.open',()=>{safe(()=>settings('backup'));return {ok:true};},{label:'WebDAV 云端备份',group:'文件',icon:'cloud'});
+  ctx.bus.registerCommand('agent.openSettings', () => { safe(settings); return { ok: true }; }); ctx.bus.registerCommand('agent.openSearchSettings', () => { safe(() => settings('search')); return { ok: true }; });
+  ctx.bus.registerCommand('agent.attachFavorite', async ({element}={}) => {
+    if(!element?.id||!element.html)return {ok:false,error:'收藏元素内容无效'};
+    const text=JSON.stringify({favoriteId:element.id,name:element.name,w:element.w,h:element.h,type:element.type,description:element.description,html:element.html,css:element.css});
+    files.push({id:uid('favorite'),name:element.name,kind:'doc',kindLabel:'收藏元素',status:'ready',text:'收藏元素的完整副本（用户素材）。要原样放入当前页面，调用 app_run_command，name="favorites.insert"，payload={favoriteId:'+JSON.stringify(element.id)+'}；如需修改，请先读取下方源码。\n'+text});
+    setOpen(true);renderFiles();refreshControls();return {ok:true};
+  });
+  ctx.bus.registerCommand('agent.openImageSettings', () => { safe(() => settings('image')); return { ok: true }; });
   ctx.bus.registerCommand('agent.openSkills', () => { safe(async () => openManager(ctx, { catalog: await loadCatalog(ctx), enabled: loop.skills, onChange: (ids) => loop.setSkills(ids) })); return { ok: true }; });
   ctx.bus.registerCommand('agent.openVersions', () => { safe(() => versions.open()); return { ok: true }; });
   ctx.bus.registerCommand('agent.fullscreen', (p={}) => setFullscreen(p.open ?? !fullscreen), {label:'全屏对话',group:'Agent',icon:'maximize'});
@@ -391,7 +435,7 @@ export async function init(ctx) {
     plan.classList.remove('hidden'); planLabel.textContent = done === steps.length ? `已完成 ${done} 项任务` : `${done}/${steps.length} · ${steps.find((s) => s.status === 'running')?.title || '任务计划'}`;
     planBody.replaceChildren(...steps.map((s) => h('div', { class: 'agw-plan-step', 'data-state': s.status }, glyph(s.status === 'done' ? 'check' : s.status === 'running' ? 'loading' : 'circle', 13), s.title)));
   });
-  window.addEventListener('beforeunload', () => { saveDraft(); loop.flush(); }); safe(async () => { await loadSettings(ctx); refreshControls(); });
+  window.addEventListener('beforeunload', () => { saveDraft(); loop.flush(); }); safe(async () => { await loadSettings(ctx); loop.refreshContext(); refreshControls(); });
   await loop.load(ctx.store.get().project?.id || null); welcome(); refreshControls(); syncAppearance();
   if (read('wds:agent:fullscreen') === 'true' && app.dataset.agent==='open') setFullscreen(true);
   return { panel, loop };

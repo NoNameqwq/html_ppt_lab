@@ -435,89 +435,37 @@ function pickKind(title, index, total) {
   return 'list';
 }
 
+const DIRECTION_NOTES = {
+  aurora:'Dark atmospheric color fields, large type and selective translucent layers.',
+  swiss:'Precise asymmetric grid, restrained signal color and strong typography.',
+  editorial:'Editorial hierarchy, generous margins, serif accents and image-led composition.',
+  noir:'Cinematic restraint, warm highlights, deliberate darkness and slow emphasis.',
+  celadon:'Quiet natural tones, calligraphic space and refined CJK typography.',
+  risograph:'Print-inspired contrasts, deliberate texture and bold asymmetric shapes.',
+  terminal:'Technical clarity, monospace detail, explicit structure and purposeful motion.',
+  clay:'Tactile forms, gentle volume and approachable visual explanation.',
+  blueprint:'Engineering precision, measured geometry and clearly labeled relationships.',
+  vapor:'Expressive retro color and spatial depth when appropriate to the subject.',
+};
 function directionBlock(dir) {
-  const p = dir.palette;
-  return [
-    `视觉方向：${dir.name}（${dir.id}）——${dir.tagline}`,
-    `- 主题变量：--wpx-bg:${p.bg} / --wpx-fg:${p.fg} / --wpx-muted:${p.muted} / --wpx-accent:${p.accent} / --wpx-accent-2:${p.accent2} / --wpx-line:${p.line}`,
-    `- 字体：标题 ${dir.type.title}；正文 ${dir.type.body}`,
-    `- 质感：${dir.texture.join('；')}`,
-    `- 动效签名：${dir.motion}`,
-    `- 版式习惯：${dir.layout}`,
-    `- 文案语气：${dir.copy}`,
-    `- 禁止：${dir.avoid}`,
-  ].join('\n');
+  return 'Initial visual direction: '+dir.id+'. '+DIRECTION_NOTES[dir.id]+'\nPalette seed: '+JSON.stringify(dir.palette)+'\nDerive typography, grid, texture and motion for this content; the seed is adjustable, not a mandatory template.';
 }
-
-/**
- * 把「一句话主题」扩成一份完整的创作 brief。
- * @returns {{display:string, brief:string, direction:object, scene:object|null, pages:number}}
- */
-export function buildCreationBrief(opts = {}) {
-  const topic = String(opts.topic || '').trim() || '未命名主题';
-  const pages = Math.max(3, Math.min(20, Number(opts.pages) || 8));
-  const scene = getScene(opts.sceneId) || null;
-  const dir = getDirection(opts.directionId) || getDirection(scene && scene.direction) || getDirection(guessDirection(topic));
-  const plan = planPages(pages >= 6 ? pages - 1 : pages, scene);
-  if (pages >= 6) plan.splice(1, 0, { kind: 'navigation', title: '章节目录', goal: '按内容组织 2–4 章，用 navigation 配置可跳转的花瓣 / 轨道 / 阶梯目录；占总页数中的一页，不增加页数' });
-  const kinds = plan.map((p, i) => {
-    if (p.kind === 'navigation') return `${i + 1}. ${p.title}｜${p.goal}。目标 slideIndex 使用最终 slides 数组的 0 起始索引，不能指向自身。`;
-    const kind = PAGE_KINDS.find((k) => k.id === p.kind) || PAGE_KINDS[0];
-    return `${i + 1}. ${p.title || kind.name}｜页型 ${kind.name}（${kind.id}）：${p.goal || kind.goal}；坐标：${kind.coords}`;
+export function buildCreationBrief(opts={}) {
+  const topic=String(opts.topic||'').trim()||'Untitled subject',pages=Math.max(3,Math.min(20,Number(opts.pages)||8));
+  const scene=getScene(opts.sceneId)||null,dir=getDirection(opts.directionId)||getDirection(scene&&scene.direction)||getDirection(guessDirection(topic));
+  const beats=Array.from({length:pages},(_,i)=>{
+    const kind=i===0?'Opening':i===pages-1?'Synthesis and next action':i===1&&pages>=6?'Navigation decision (optional)':'Evidence / explanation';
+    return (i+1)+'. '+kind+' | '+(kind.startsWith('Navigation')?'Decide if an overview helps; invent its form from the content or use this slot for substantive content.':'Choose a clear claim, supporting content and composition that advances the story.');
   }).join('\n');
-
-  const display = `做一套《${topic}》的演示 · ${dir.name} · ${pages} 页`;
-
-  const brief = `【创作任务：只给主题，直接出成品】
-
-主题：${topic}
-交付：${pages} 页，1920×1080，独立的 HTML 演示（不是办公 PPT）；每页都要有视觉锚点和动效。
-${scene ? `场景：${scene.name}（叙事骨架已给）` : '场景：自定，按「钩子 → 冲突 → 解法 → 证据 → 行动」组织'}
-
-${directionBlock(dir)}
-
-分页脚本（可微调页名，但不要改变叙事顺序）：
-${kinds}
-
-硬性要求
-1. 一次成型：第一步就调用 deck_compose 写完整套（slides 数组，每页用 html 或 elements）；不要先问风格、不要逐页询问。
-2. 视觉锚点：每页至少一个「大」元素——巨型数字 / 满版图 / 大色块 / 巨型引言 / 全屏图表；不允许出现「居中标题 + 三行要点」的模板页。
-3. 文字克制：每页正文不超过 2 段、每段不超过 40 字；标题 6–14 字；数据给出具体数值与单位。
-4. 动效预算：每页入场 2–4 个（delay 0/80/160ms 三档）；每页最多 1 个循环强调；至少 2 页使用非 fade 的切换（zoom / wipeUp / iris / shutter / curtains 等）；全片至少 1 条贯穿层（屏闪 / 光带 / 飞入），用时间线或 deck_set_transition_fx 实现。
-5. 背景不是纯色：用 ${dir.texture[0]}；可以用 deck_compose 的 slide.html 直接写渐变、网格、SVG。
-6. 结束后自检：deck_get_state 确认页数与切换；再补 2–3 处细节（转场叠加 / 时间线 / 全局 CSS），不要追加新页。
-7. 不要使用「PPT」「幻灯片」「模板」这些词；不要 emoji（${dir.id === 'clay' ? '最多 1 个' : '一个都不要'}）；不要外链字体与图片。
-8. 如果主题本身信息不足：用合理的行业常识补全，并在最后一行说明假设；不要停下来反问。
-9. 页面知识表达：公式用 math 元素或 HTML 内 LaTeX，讲解结构、因果与流程用可编辑 SVG；内容页继承目录章节的颜色、形状与视觉母题。
-
-执行顺序（照做）
-① deck_compose { direction:"${dir.id}", slides:[…${pages} 页…] }
-② deck_set_transition_fx（2–3 页叠加：${dir.id === 'terminal' ? 'flash / sweep' : 'flash / fly / sweep'}）
-③ deck_set_timeline 或 deck_add_slide 之外的细节修饰（贯穿光带 / 屏闪关键帧）
-④ deck_get_state 复核 → 一句话汇报。`;
-
-  return { display, brief, direction: dir, scene, pages };
+  const brief='## Creation task\nSubject (user content): '+topic+'\nDeliver exactly '+pages+' pages, logical size 1920 × 1080, in the user\'s language. Scene: '+(scene?.id||'choose for the objective')+'.\n\n'+directionBlock(dir)+'\n\nSuggested page budget (adapt the narrative, not the total):\n'+beats+'\n\nDesign and implement a finished editable HTML presentation. Do not ask for routine aesthetic choices; decide from content. All overview and section pages count in the total. Original navigation HTML/SVG/CSS is encouraged; do not restrict it to petals, orbit or steps. Use available fonts, editable SVG and LaTeX. Use deck_compose for efficient initial construction or delegate high-output implementation when collaboration is active. Preserve shared role responsibilities. Inspect rendered pages with deck_capture_slide when the model supports vision, make precise local corrections, and capture again. Verify links, page count and motion separately. Do not invent evidence or claim unperformed checks.';
+  return {display:'做一套《'+topic+'》的演示 · '+dir.name+' · '+pages+' 页',brief,direction:dir,scene,pages};
 }
-
-/** 注入系统提示词的创作指南（含方向目录） */
-export const CREATION_GUIDE = `## 创作模式（用户只给主题时）
-判断：用户只说「做一套关于 X 的」「帮我做个 X 的演示 / 介绍 / 提案」，就是在创作模式下单，直接产出成品，不要反问风格。
-
-流程（最多 4 步）：
-1. 定方向：从下面的方向目录选一个最贴合主题的（用户指定则服从）；用户没指定页数时默认 8 页（3–20 页可调）。
-2. 定脚本：先用 2–4 章把「钩子 → 冲突 → 解法 → 证据 → 行动」组织起来；≥6 页且章节清晰时在封面后留 1 页动画目录，计入总页数；≤5 页通常用轻导航。内容页交替使用论点 / 数据 / 左右分栏 / 图解 / 引言，延续章节母题。
-3. 一次成型：调用 deck_compose 写入整套页面（direction + slides），元素坐标参考页型配方；每页必须有 1 个视觉锚点。
-4. 加效果 + 自检：deck_set_transition_fx 叠加 2–3 处屏闪/飞入/扫光；需要贯穿效果时 deck_set_timeline；最后 deck_get_state 复核页数与切换。
-
-质量红线：
-- 禁止「居中大标题 + 三行要点」的模板页；禁止每页都用同一种淡入。
-- 一页只讲一个论点；正文不超过 2 段 × 40 字；标题 6–14 字。
-- 每页入场 2–4 个、循环强调 ≤1 个；至少 2 页使用非 fade 切换；全片至少 1 条贯穿效果。
-- 背景要有质感（光斑 / 网格 / 噪点 / 渐层），不要纯色平铺。
-- 不要 emoji，不要外链字体与图片；不要出现「PPT / 幻灯片 / 模板」字样。
-
-视觉方向目录（deck_compose 的 direction 取值）：
-${ART_DIRECTIONS.map((d) => `- ${d.id}｜${d.name}：${d.tagline}；主色 ${d.palette.accent}，底 ${d.palette.bg}；动效 ${d.motion.split('；')[0]}`).join('\n')}
-
-页型配方（1920×1080，坐标可直接用）：
-${PAGE_KINDS.map((k) => `- ${k.id}｜${k.name}：${k.goal}；${k.coords}`).join('\n')}`;
+export const CREATION_GUIDE = `## Creation from a topic
+When the user requests a presentation from a topic, choose an appropriate narrative and visual direction and implement the result. Default to 8 pages when the user gives no count; honor explicit counts.
+- Start from the claim, audience and evidence. Vary composition across pages while keeping coherent tokens.
+- Decide whether an overview, section markers or nested navigation helps. Count navigation pages within the total. Invent form and motion from the content; presets are optional.
+- Use deck_compose for efficient construction, then refine specific details. In collaboration mode, the design role defines the visual system and key logic; hand off large implementation work rather than doing every page itself.
+- Use editable SVG for explanations and LaTeX for mathematics. Select fonts appropriate to the language.
+- Verify the changed scope with actual rendered views and measured bounds. Correct concrete defects; recapture affected regions after corrections. Check navigation and motion when changed. Report actual results and limitations.
+- No arbitrary requirement forces gradients, texture, tiny word counts, continuous overlays or a fixed page template.
+Use a topic-specific visual direction; a user-selected brief already carries its palette and composition seed. Do not request a full design catalog for routine edits.`;

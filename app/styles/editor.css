@@ -138,6 +138,9 @@ html[data-theme="dark"] #canvas-area {
 }
 #selection-layer.is-editing,
 #selection-layer.is-editing .sel-hit { pointer-events: none; }
+#selection-layer.is-three-interacting .sel-hit,
+#selection-layer.is-three-interacting .sel-handle { pointer-events:none; }
+#selection-layer.is-three-interacting .sel-box { visibility:hidden; }
 .sel-box {
   position: absolute;
   transform-origin: center center;

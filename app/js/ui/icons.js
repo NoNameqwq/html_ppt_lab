@@ -1,6 +1,9 @@
 /* 内联 SVG 图标集（24×24，描边风格，currentColor） */
 
 const P = {
+  motion: '<path d="m15 3 1.6 4.4L21 9l-4.4 1.6L15 15l-1.6-4.4L9 9l4.4-1.6zM3 20l7-7M3 10h2M7 3v2M19 18v3M18 19h3"/>',
+  archive: '<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v12h14V8M10 12h4"/>',
+  box:'<path d="m12 3 9 5v9l-9 5-9-5V8zM3 8l9 5 9-5M12 13v9M7.5 5.5l9 5"/>',
   shield: '<path d="M12 3 4.5 6v5.5c0 4.2 3 7.5 7.5 9.5 4.5-2 7.5-5.3 7.5-9.5V6z"/><path d="M12 8v5M12 16v.1"/>',
   paperclip: '<path d="m8 12 6.4-6.4a3.5 3.5 0 0 1 5 5L10.6 19a5 5 0 0 1-7-7l9-9"/><path d="m7 14 7.5-7.5a1.4 1.4 0 0 1 2 2L9 16"/>',
   'more-horizontal': '<circle cx="5" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="19" cy="12" r="1" fill="currentColor"/>',
@@ -95,6 +98,7 @@ const P = {
   sparkles: '<rect x="3" y="3" width="18" height="18" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path d="M7.2 8.4 10.8 12l-3.6 3.6M13 15.6h4.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/>',
   send: '<path d="M4.5 12 20 4l-4.5 16-4-6.5z"/><path d="m11.5 13.5 4-4"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v4.5h-4.5"/>',
+  cloud: '<path d="M7 18a5 5 0 0 1-1-9.9A6.5 6.5 0 0 1 18.5 8a5 5 0 0 1-.5 10Z"/>',
   history: '<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3.5 4v5h5"/><path d="M12 8v4.5l3 1.8"/>',
   clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5.2l3.4 2"/>',
   code: '<path d="m8.5 8-4.5 4 4.5 4M15.5 8l4.5 4-4.5 4M13.5 5l-3 14"/>',

@@ -44,7 +44,7 @@ function mkItem(opt) {
     disabled: !!opt.disabled,
   },
   h('span', { class: 'ctx-menu-ic', html: icon(opt.icon || 'square', 15) }),
-  h('span', { class: 'ctx-menu-label' }, opt.label),
+  h('span', { class: 'ctx-menu-text' }, opt.label),
   opt.hint ? h('kbd', { class: 'ctx-menu-hint' }, opt.hint) : null,
   opt.sub ? h('span', { class: 'ctx-menu-caret', html: icon('chevron-right', 13) }) : null);
   if (opt.disabled) return btn;
@@ -130,6 +130,7 @@ async function openForElement(hit, clientX, clientY) {
   menu.append(h('div', { class: 'ctx-menu-label' }, '编辑'));
   if (hit.type === 'text' || hit.type === 'html') {
     menu.append(mkItem({ icon: 'type', label: '编辑文字', hint: '双击', run: () => ctx.bus.emit('editor:begin-text', { elementId: textId }) }));
+    menu.append(mkItem({ icon: 'type', label: '转成艺术字', run: () => ctx.bus.runCommand('format.typeStudio', { elementId }) }));
   }
   menu.append(mkItem({
     icon: 'code', label: '编辑 HTML 源码',
@@ -154,6 +155,8 @@ async function openForElement(hit, clientX, clientY) {
   menu.append(mkItem({ icon: 'copy', label: '复制', hint: 'Ctrl+C', run: () => ctx.bus.runCommand('edit.copy') }));
   menu.append(mkItem({ icon: 'clipboard', label: '粘贴', hint: 'Ctrl+V', run: () => ctx.bus.runCommand('edit.paste') }));
   menu.append(mkItem({ icon: 'copy', label: '原位复制', hint: 'Ctrl+D', run: () => ctx.bus.runCommand('edit.duplicate') }));
+  menu.append(mkItem({ icon: 'star', label: '收藏元素', run: () => ctx.bus.runCommand('favorites.save', { elementId }) }));
+  menu.append(mkItem({ icon: 'folder', label: '打开元素收藏', run: () => ctx.bus.runCommand('favorites.open') }));
   menu.append(mkItem({ icon: 'trash', label: '删除', hint: 'Del', danger: true, run: () => ctx.bus.runCommand('edit.delete') }));
 
   menu.append(h('div', { class: 'ctx-menu-sep' }));
@@ -284,6 +287,7 @@ function openForCanvas(clientX, clientY) {
   menu.append(mkItem({ icon: 'image', label: '图片', run: () => ctx.bus.runCommand('insert.image') }));
   menu.append(mkItem({ icon: 'shapes', label: '形状', run: () => ctx.bus.runCommand('insert.shape') }));
   menu.append(mkItem({ icon: 'code', label: 'HTML 片段', run: () => ctx.bus.runCommand('insert.html') }));
+  menu.append(mkItem({ icon: 'box', label: '3D 结构', run: () => ctx.bus.runCommand('insert.three') }));
 
   menu.append(h('div', { class: 'ctx-menu-sep' }));
   menu.append(h('div', { class: 'ctx-menu-label' }, '画布'));

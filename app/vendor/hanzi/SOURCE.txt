@@ -1,0 +1,9 @@
+Stroke data from hanzi-writer-data (https://github.com/chanind/hanzi-writer-data),
+derived from Make Me a Hanzi (https://github.com/skishore/makemeahanzi) by Shaunak Kishore.
+Licensed under the Arphic Public License — see ARPHICPL.TXT.
+
+strokes-common.json: GB2312 level-1 (3755 common simplified characters)
+strokes-full.json:   all available characters
+
+Paths are in a 1024x1024 grid with y pointing up; render with translate(0,900) scale(1,-1).
+Regenerate with: node scripts/pack-hanzi.mjs

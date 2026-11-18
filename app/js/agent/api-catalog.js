@@ -5,14 +5,15 @@ export const API_CATALOG = [
   entry('projects.get', 'GET', '/api/projects/{projectId}', '工程元信息与文件列表'),
   entry('projects.create', 'POST', '/api/projects', '新建工程', 'edit', { name: 'string', templateId: 'string（先查 templates.list）' }),
   entry('projects.import', 'POST', '/api/projects/import', '导入 HTML、PPT/PPTX、内置示例或本地文件，PPT 返回 importReport', 'full', { name: 'string', fileName: 'string', content: 'HTML string', dataUrl:'PPT base64 data URL',sourcePath: '本地文件路径', importId:'对话附件的暂存 ID',pptMode:'editable（默认可编辑）或 faithful（PowerPoint 逐页图片）',sampleId: '内置示例 ID' }),
-  entry('projects.update', 'PATCH', '/api/projects/{projectId}', '重命名、修改工程元信息', 'edit', { name: 'string', theme: 'string', cover: 'string' }),
+  entry('projects.update', 'PATCH', '/api/projects/{projectId}', '重命名、修改工程元信息；archived=true 归档，false 恢复，保留文件和历史', 'edit', { name: 'string', theme: 'string', cover: 'string', archived: 'boolean' }),
   entry('projects.duplicate', 'POST', '/api/projects/{projectId}/duplicate', '复制工程', 'edit'),
   entry('projects.delete', 'DELETE', '/api/projects/{projectId}', '删除用户明确要求删除的工程', 'full'),
   entry('projects.upgrade', 'POST', '/api/projects/{projectId}/upgrade-runtime', '更新工程运行时', 'full'),
   entry('files.read', 'GET', '/api/projects/{projectId}/file', '读取工程文件，query.path 为相对路径', 'read', { path: 'query: string' }),
   entry('files.write', 'PUT', '/api/projects/{projectId}/file', '写入工程文件；当前工程使用 file_write 自动保存和重载', 'full', { path: 'string', content: 'string' }),
   entry('assets.upload', 'POST', '/api/projects/{projectId}/assets', '上传素材并返回工程内相对 URL', 'edit', { name: 'string', dataUrl: 'base64 data URL' }),
-  entry('images.generate', 'POST', '/api/projects/{projectId}/generate-image', '生成图片并保存为本地素材；必须由用户手动开启生图。需要同时插入页面时用 deck_generate_image', 'edit', { prompt: 'string' }),
+  entry('images.generate', 'POST', '/api/projects/{projectId}/generate-image', '生成图片并保存为本地素材；必须由用户手动开启生图。需要同时插入页面时用 deck_generate_image', 'edit', { prompt: 'string', model: '可选，已发现或用户指定的模型', size: 'auto / 1024x1024 / 1536x1024 / 1024x1536', quality: 'auto / low / medium / high', background: 'auto / opaque / transparent（GPT）', outputFormat: 'png / jpeg / webp（GPT）', outputCompression: '0–100，JPEG/WebP（GPT）' }),
+  entry('images.models', 'GET', '/api/image-models', '使用用户已保存的生图配置发现可用图像模型，不生成图片或开启生图'),
   entry('patches.read', 'GET', '/api/projects/{projectId}/patches', '读取原稿补丁'),
   entry('patches.write', 'PUT', '/api/projects/{projectId}/patches', '保存原稿补丁', 'full', { patches: 'array' }),
   entry('config.read', 'GET', '/api/projects/{projectId}/deck-config', '读取全局效果配置'),
@@ -31,6 +32,11 @@ export const API_CATALOG = [
   entry('export.html', 'GET', '/api/projects/{projectId}/export', '生成 HTML 下载链接'),
   entry('preview.thumbnail', 'GET', '/api/projects/{projectId}/thumb', '生成预览链接，query.slide 为从 0 开始的页码'),
   entry('templates.list', 'GET', '/api/templates', '列出新建模板'),
+  entry('elements.list', 'GET', '/api/elements', '列出跨工程共享的收藏元素，返回名称、尺寸和说明'),
+  entry('elements.get', 'GET', '/api/elements/{elementId}', '读取收藏元素完整 HTML、内嵌素材及样式，query.elementId 指定收藏 ID'),
+  entry('elements.save', 'POST', '/api/elements', '保存自包含元素到跨工程收藏库；收藏画布选中元素时也可用 app_run_command favorites.save', 'edit', { name:'string',html:'自包含的单个元素 HTML',css:'局部样式',w:'number',h:'number',description:'string' }),
+  entry('elements.update', 'PATCH', '/api/elements/{elementId}', '重命名收藏元素或修改说明，query.elementId 指定收藏 ID','edit',{name:'string',description:'string'}),
+  entry('elements.delete', 'DELETE', '/api/elements/{elementId}', '删除用户明确要求删除的收藏元素，query.elementId 指定收藏 ID','full'),
   entry('templates.save', 'POST', '/api/templates', '保存当前工程为模板，或导入 HTML / ZIP / PPT 模板', 'full',{projectId:'已有工程 ID',name:'string',desc:'string',content:'HTML string',fileName:'文件名',dataUrl:'base64 data URL'}),
   entry('templates.update', 'PATCH', '/api/templates/{templateId}', '修改自定义模板名称和说明', 'edit',{name:'string',desc:'string'}),
   entry('templates.delete', 'DELETE', '/api/templates/{templateId}', '删除用户明确要求删除的自定义模板', 'full'),
@@ -51,7 +57,8 @@ export function apiURL(operation, projectId, query = {}) {
   if (operation.path.includes('{projectId}') && !projectId) throw new Error('需要 projectId 或打开一个工程。');
   if(operation.path.includes('{templateId}')&&!query.templateId)throw new Error('请在 query.templateId 指定模板 ID');
   if(operation.path.includes('{versionId}')&&!query.versionId)throw new Error('请在 query.versionId 指定版本 ID');
-  const url = operation.path.replace('{projectId}', encodeURIComponent(projectId || '')).replace('{templateId}',encodeURIComponent(query.templateId||'')).replace('{versionId}',encodeURIComponent(query.versionId||''));
+  if(operation.path.includes('{elementId}')&&!query.elementId)throw new Error('请在 query.elementId 指定收藏 ID');
+  const url = operation.path.replace('{projectId}', encodeURIComponent(projectId || '')).replace('{templateId}',encodeURIComponent(query.templateId||'')).replace('{versionId}',encodeURIComponent(query.versionId||'')).replace('{elementId}',encodeURIComponent(query.elementId||''));
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) if (value != null) params.set(key, String(value));
   return url + (params.size ? '?' + params : '');

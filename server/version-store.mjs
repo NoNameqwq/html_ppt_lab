@@ -16,7 +16,14 @@ const hash = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const kept = (name) => /^(\.versions|\.chats|\.git)$/i.test(name) || /^\.chat\.json(?:\.|$)/i.test(name);
 const idOf = () => 'v-' + Date.now().toString(36) + '-' + crypto.randomBytes(6).toString('hex');
 const storePath = (dir, ...parts) => path.join(dir, '.versions', ...parts);
-async function stat(file) { try { return await fs.lstat(file); } catch (e) { if (e.code === 'ENOENT') return null; throw e; } }
+const busy = e => ['EPERM', 'EACCES', 'EBUSY'].includes(e?.code);
+async function retryBusy(fn) {
+  for (const delay of [0, 30, 80, 160, 300]) {
+    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+    try { return await fn(); } catch (e) { if (!busy(e) || delay === 300) throw e; }
+  }
+}
+async function stat(file) { try { return await fs.lstat(file); } catch (e) { if (['ENOENT', 'ENOTDIR'].includes(e.code)) return null; throw e; } }
 async function directory(file) {
   await fs.mkdir(file, { recursive: true });
   const s = await fs.lstat(file);
@@ -31,27 +38,27 @@ async function init(dir) {
 }
 async function atomic(file, data) {
   const temp = file + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
-  try { await fs.writeFile(temp, data); await fs.rename(temp, file); }
-  finally { await fs.rm(temp, { force: true }); }
+  try { await fs.writeFile(temp, data); await retryBusy(() => fs.rename(temp, file)); }
+  finally { await fs.rm(temp, { force: true, maxRetries: 5, retryDelay: 50 }); }
 }
 function validPath(rel) {
   if (typeof rel !== 'string' || !rel || rel.includes('\\') || rel.includes(':') || rel.includes('\0') || path.posix.isAbsolute(rel)
     || rel.split('/').some((s) => !s || s === '.' || s === '..' || /[<>"|?*]|[. ]$/.test(s)) || kept(rel.split('/')[0])) throw error('版本文件路径无效');
   return rel;
 }
-async function tree(dir) {
+async function tree(dir, directories = [], prefix = '') {
   const files = [];
   async function walk(at, prefix = '') {
     for (const entry of await fs.readdir(at, { withFileTypes: true })) {
       if (!prefix && kept(entry.name)) continue;
       const rel = validPath(prefix + entry.name), file = path.join(at, entry.name), s = await fs.lstat(file);
       if (s.isSymbolicLink()) throw error('工程含链接，无法安全建立版本：' + rel);
-      if (s.isDirectory()) await walk(file, rel + '/');
+      if (s.isDirectory()) { directories.push(rel); await walk(file, rel + '/'); }
       else if (s.isFile()) files.push({ path: rel, file, size: s.size });
       else throw error('不支持的工程文件：' + rel);
     }
   }
-  await walk(dir);
+  await walk(dir, prefix);
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 async function putBlob(dir, data) {
@@ -149,46 +156,147 @@ export async function readVersionFile(dir, id, rel) {
   return version.kind==='legacy'?version.legacyData:blob(dir,entry.hash);
 }
 
-/* All blobs are verified and staged before the first project file is touched. A journal
-   permits rollback if the process exits during the directory swaps. Call under the project lock. */
+const deepestFirst = (a, b) => b.split('/').length - a.split('/').length || a.localeCompare(b);
+function parentDirectories(paths) {
+  const dirs = new Set();
+  for (const rel of paths) {
+    let parent = path.posix.dirname(rel);
+    while (parent !== '.') { dirs.add(parent); parent = path.posix.dirname(parent); }
+  }
+  return [...dirs];
+}
+async function stageFiles(dir, files, destination, legacyData) {
+  for (const [rel, f] of Object.entries(files)) {
+    validPath(rel);
+    const data = legacyData || await blob(dir, f.hash);
+    if (data.length !== f.size || hash(data) !== f.hash) throw error('版本文件大小或摘要校验失败，未更改工程', 409);
+    const target = path.join(destination, rel);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, data);
+  }
+}
+async function installFile(source, target) {
+  try { await retryBusy(() => fs.rename(source, target)); }
+  catch (e) {
+    if (!busy(e)) throw e;
+    // Windows handles can allow writing while denying delete/rename sharing.
+    // The durable journal and verified before-blobs cover interrupted copies.
+    await retryBusy(() => fs.copyFile(source, target));
+  }
+}
+async function applyFiles(dir, files, paths, directories, managedDirectories, staged) {
+  // Never recursively delete a live directory: unchanged/locked assets stay put.
+  // All supplied paths were journaled before mutations and exclude private data.
+  await tree(dir);
+  for (const rel of [...paths].sort(deepestFirst)) {
+    const target = path.join(dir, rel), s = await stat(target);
+    if (s?.isFile() && !Object.hasOwn(files, rel)) await retryBusy(() => fs.unlink(target));
+  }
+  const wanted = new Set(directories);
+  for (const rel of [...managedDirectories].sort(deepestFirst)) {
+    if (wanted.has(rel)) continue;
+    const target = path.join(dir, rel), s = await stat(target);
+    if (s?.isDirectory()) await retryBusy(() => fs.rmdir(target));
+  }
+  for (const rel of [...directories].sort((a, b) => -deepestFirst(a, b))) await directory(path.join(dir, rel));
+  for (const [rel, f] of Object.entries(files)) {
+    const target = path.join(dir, rel), s = await stat(target);
+    if (s?.isFile() && hash(await fs.readFile(target)) === f.hash) continue;
+    await installFile(path.join(staged, rel), target);
+    if (hash(await fs.readFile(target)) !== f.hash) throw error('版本文件写入校验失败：' + rel, 409);
+  }
+}
+async function cleanupStage(stage) {
+  // A committed restore must not turn into a reported failure just because a
+  // scanner still holds an obsolete transaction file. Such leftovers are inert.
+  try { await fs.rm(stage, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+  catch (e) { if (!busy(e) && !['ENOTEMPTY', 'ENOENT'].includes(e.code)) console.warn('[versions] 暂存目录清理失败', e.message); }
+}
+function validateFileJournal(tx) {
+  if (!Array.isArray(tx.paths) || !Array.isArray(tx.beforeDirectories) || !Array.isArray(tx.afterDirectories)
+    || !tx.before || typeof tx.before !== 'object' || Array.isArray(tx.before)) throw error('版本恢复日志无效', 409);
+  for (const rel of [...tx.paths, ...tx.beforeDirectories, ...tx.afterDirectories, ...Object.keys(tx.before)]) validPath(rel);
+  if (Object.keys(tx.before).some(rel => !tx.paths.includes(rel)) || new Set(tx.paths).size !== tx.paths.length) throw error('版本恢复日志无效', 409);
+  // No manifest may require the same path to be both a file and an ancestor.
+  const beforeDirs = new Set(tx.beforeDirectories), afterDirs = new Set(tx.afterDirectories);
+  if (beforeDirs.size !== tx.beforeDirectories.length || afterDirs.size !== tx.afterDirectories.length
+    || parentDirectories([...Object.keys(tx.before), ...beforeDirs]).some(rel => !beforeDirs.has(rel))
+    || parentDirectories([...afterDirs]).some(rel => !afterDirs.has(rel))
+    || [...beforeDirs].some(rel => Object.hasOwn(tx.before, rel))) throw error('版本恢复日志文件结构冲突', 409);
+}
+
+// Upgrade old directory-swap journals before touching the live tree. Old backups
+// stay intact until commit, so recovery is repeatable even if it is interrupted.
+async function upgradeLegacyTransaction(dir, tx, stage, journal) {
+  if (!Array.isArray(tx.names) || !Array.isArray(tx.original)) throw error('版本恢复日志无效', 409);
+  for (const name of [...tx.names, ...tx.original]) { validPath(name); if (name.includes('/')) throw error('版本恢复日志无效', 409); }
+  // Legacy HTML-only restores journaled every original root but managed index.html only.
+  if (new Set(tx.names).size !== tx.names.length || new Set(tx.original).size !== tx.original.length) throw error('版本恢复日志无效', 409);
+  const liveDirs = [], current = await tree(dir, liveDirs), before = {}, directories = new Set(liveDirs);
+  const paths = new Set(current.filter(f => tx.names.includes(f.path.split('/')[0])).map(f => f.path));
+  for (const name of tx.names) {
+    const moved = path.join(stage, 'old', name), s = await stat(moved);
+    if (s?.isSymbolicLink()) throw error('版本恢复备份不能是链接', 409);
+    const managed = rel => rel === name || rel.startsWith(name + '/');
+    if (s || !tx.original.includes(name)) for (const rel of [...directories]) if (managed(rel)) directories.delete(rel);
+    if (!s) {
+      if (tx.original.includes(name)) for (const f of current.filter(f => managed(f.path))) before[f.path] = { hash: await putBlob(dir, await fs.readFile(f.file)), size: f.size };
+      continue;
+    }
+    let oldFiles;
+    if (s.isFile()) oldFiles = [{ path: name, file: moved, size: s.size }];
+    else if (s.isDirectory()) {
+      const oldDirs = [];
+      oldFiles = await tree(moved, oldDirs, name + '/');
+      directories.add(name); oldDirs.forEach(rel => directories.add(rel));
+    } else throw error('不支持的版本恢复备份', 409);
+    for (const f of oldFiles) { const data = await fs.readFile(f.file); before[f.path] = { hash: await putBlob(dir, data), size: data.length }; paths.add(f.path); }
+  }
+  const upgraded = { schema: 2, id: tx.id, paths: [...paths], before, beforeDirectories: [...directories], afterDirectories: liveDirs,
+    ...(tx.chat ? { chat: tx.chat, sessionId: tx.sessionId } : {}) };
+  validateFileJournal(upgraded);
+  await atomic(journal, JSON.stringify(upgraded));
+  return upgraded;
+}
+
+/* Changed files are staged and before-blobs journaled before writes. Recovery
+   reconciles files in place instead of renaming directories held by Windows.
+   All restore/recovery calls must run under the project lock. */
 export async function recoverVersionTransaction(dir) {
   const journal = storePath(dir, 'transaction.json');
   if (!(await stat(journal))) return;
   await init(dir);
-  const tx = JSON.parse(await fs.readFile(journal, 'utf8'));
+  let tx = JSON.parse(await fs.readFile(journal, 'utf8'));
   if (!/^v-[a-z0-9]+-[a-f0-9]{12}$/.test(tx.id)) throw error('版本恢复日志无效', 409);
-  const stage = storePath(dir, 'transactions', tx.id), old = path.join(stage, 'old');
-  for (const name of tx.names) {
-    validPath(name);
-    if (name.includes('/')) throw error('版本恢复日志无效', 409);
-    const moved = await stat(path.join(old, name));
-    if (moved) {
-      await fs.rm(path.join(dir, name), { recursive: true, force: true });
-      await fs.rename(path.join(old, name), path.join(dir, name));
-    } else if (!tx.original.includes(name)) await fs.rm(path.join(dir, name), { recursive: true, force: true });
-  }
-  if (tx.chat) await saveChat(dir, tx.sessionId, JSON.parse((await blob(dir, tx.chat)).toString()));
-  await fs.rm(journal, { force: true });
-  await fs.rm(stage, { recursive: true, force: true });
+  const stage = storePath(dir, 'transactions', tx.id);
+  await directory(storePath(dir, 'transactions')); await directory(stage);
+  if (tx.schema === undefined) tx = await upgradeLegacyTransaction(dir, tx, stage, journal);
+  else if (tx.schema !== 2) throw error('版本恢复日志格式不支持', 409);
+  validateFileJournal(tx);
+  const rollback = path.join(stage, 'rollback'); await directory(rollback);
+  // Verify every rollback asset and conversation before modifying anything.
+  await stageFiles(dir, tx.before, rollback);
+  const chat = tx.chat ? JSON.parse((await blob(dir, tx.chat)).toString()) : null;
+  await applyFiles(dir, tx.before, tx.paths, tx.beforeDirectories, [...new Set([...tx.beforeDirectories, ...tx.afterDirectories])], rollback);
+  if (chat) await saveChat(dir, tx.sessionId, chat);
+  await retryBusy(() => fs.unlink(journal));
+  await cleanupStage(stage);
 }
 export async function restoreVersion(dir, id, options = {}) {
   await init(dir);
+  await recoverVersionTransaction(dir);
   const version = await readVersion(dir, id);
   const chat = options.rewindConversation && version.chatHash ? JSON.parse((await blob(dir, version.chatHash)).toString()) : null;
   if (options.rewindConversation && !chat) throw error('此版本没有对应的对话快照');
   const txId = idOf(), stage = storePath(dir, 'transactions', txId);
   await directory(storePath(dir, 'transactions')); await directory(stage);
-  await directory(path.join(stage, 'next')); await directory(path.join(stage, 'old'));
+  await directory(path.join(stage, 'next'));
   let journalWritten = false;
   try {
-    for (const [rel, f] of Object.entries(version.files)) {
-      const data = version.kind === 'legacy' ? version.legacyData : await blob(dir, f.hash);
-      if (data.length !== f.size) throw error('版本文件大小校验失败', 409);
-      const target = path.join(stage, 'next', rel);
-      await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, data);
-    }
+    if (parentDirectories(Object.keys(version.files)).some(rel => Object.hasOwn(version.files, rel))) throw error('版本文件结构冲突，未更改工程', 409);
+    await stageFiles(dir, version.files, path.join(stage, 'next'), version.kind === 'legacy' ? version.legacyData : null);
     // Validate the live tree (including links) before backing it up or removing anything.
-    await tree(dir);
+    const beforeDirectories = []; await tree(dir, beforeDirectories);
     const sessionId = version.conversation?.sessionId || 'default';
     const currentChat = chat ? await readChat(dir, sessionId) : null;
     const backup = await captureVersion(dir, { kind: 'backup', label: '回退前自动备份',
@@ -198,21 +306,27 @@ export async function restoreVersion(dir, id, options = {}) {
       archivedSession = 'branch-' + txId;
       await saveChat(dir, archivedSession, { ...currentChat, title: '回退前分支 · ' + (currentChat.messages?.find((m) => m.role === 'user')?.content || '对话').slice(0, 50), origin: { sessionId, versionId: id } });
     }
-    const original = (await fs.readdir(dir)).filter((n) => !kept(n));
-    const incoming = await fs.readdir(path.join(stage, 'next'));
-    const names = version.kind === 'legacy' ? ['index.html'] : [...new Set([...original, ...incoming])];
+    const baseline = await readVersion(dir, backup.id), originals = baseline.files;
+    const paths = (version.kind === 'legacy' ? ['index.html'] : [...new Set([...Object.keys(originals), ...Object.keys(version.files)])])
+      .filter(rel => originals[rel]?.hash !== version.files[rel]?.hash);
+    const before = Object.fromEntries(paths.filter(rel => Object.hasOwn(originals, rel)).map(rel => [rel, originals[rel]]));
+    const after = Object.fromEntries(paths.filter(rel => Object.hasOwn(version.files, rel)).map(rel => [rel, version.files[rel]]));
+    const afterDirectories = version.kind === 'legacy' ? beforeDirectories : parentDirectories(Object.keys(version.files));
     const journal = storePath(dir, 'transaction.json');
-    await atomic(journal, JSON.stringify({ id: txId, names, original, ...(chat ? { sessionId, chat: await putBlob(dir, Buffer.from(JSON.stringify(currentChat))) } : {}) }));
+    await atomic(journal, JSON.stringify({ schema: 2, id: txId, paths, before, beforeDirectories, afterDirectories,
+      ...(chat ? { sessionId, chat: await putBlob(dir, Buffer.from(JSON.stringify(currentChat))) } : {}) }));
     journalWritten = true;
-    for (const name of names) {
-      if (await stat(path.join(dir, name))) await fs.rename(path.join(dir, name), path.join(stage, 'old', name));
-      if (incoming.includes(name)) await fs.rename(path.join(stage, 'next', name), path.join(dir, name));
-    }
+    await applyFiles(dir, after, paths, afterDirectories, [...new Set([...beforeDirectories, ...afterDirectories])], path.join(stage, 'next'));
     if (chat) await saveChat(dir, sessionId, chat);
-    await fs.rm(journal, { force: true }); journalWritten = false;
+    await retryBusy(() => fs.unlink(journal)); journalWritten = false;
     return { ok: true, version: publicVersion(version), backup, conversation: chat ? { sessionId, archivedSession } : null };
   } catch (e) {
-    if (journalWritten) await recoverVersionTransaction(dir);
+    let recovered = false;
+    if (journalWritten) {
+      try { await recoverVersionTransaction(dir); journalWritten = false; recovered = true; }
+      catch (recoveryError) { throw error('回退中断，自动恢复尚未完成；原文件和恢复日志已保留。请释放占用后重试。原因：' + recoveryError.message, 409); }
+    }
+    if (busy(e)) throw error('版本回退遇到文件占用或权限限制' + (recovered ? '，已恢复回退前的完整工程' : '，未修改工程') + '。请关闭占用素材的外部程序后重试。原因：' + e.message, 409);
     throw e;
-  } finally { if (!journalWritten || !(await stat(storePath(dir, 'transaction.json')))) await fs.rm(stage, { recursive: true, force: true }); }
+  } finally { if (!journalWritten) await cleanupStage(stage); }
 }

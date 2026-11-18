@@ -3,34 +3,15 @@ id: pptx-visual-composition
 name: PPT 视觉构图与质量检查
 desc: 从 Anthropic PPTX 技能改编的布局变化、信息图、对齐与防溢出检查
 category: design
-default: true
+default: false
 source: https://github.com/anthropics/skills/tree/main/skills/pptx
 license: Apache-2.0
 ---
-# PPT 视觉构图与质量检查
-
-改写自 Anthropic PPTX skill 的 Design Ideas 和 Visual QA 章节，已适配本项目的可编辑 HTML 舞台。来源：https://github.com/anthropics/skills/blob/main/skills/pptx/SKILL.md 。本文件为中文改编，未使用上游 Office 转换脚本；许可保存在 skills/licenses/anthropic-pptx-Apache-2.0.txt。
-
-## 整套构图
-
-- 颜色与主题相关，选择一个主导色系、一到两个辅色和克制的强调色，避免每种颜色等权重。
-- 确定可识别的图形母题，贯穿目录、章节和收尾。可用叶片、轨道、几何剖面或图像框，避免仅靠反复的装饰条。
-- 版式应随内容变化：观点用留白与大字，证据用图表，机制用图解，方案用步骤，对照用双栏。不要把每一页都做成同样的标题加卡片。
-- 正文和列表通常左对齐；居中主要用于短标题、短引言与章节节点。给文本、边框和图片保留一致间距。
-
-## 推荐布局库（1920×1080）
-
-1. 图文双栏：120px 安全区，左侧 700px 论点，右侧约 880px 图解，间隔 ≥64px。
-2. 半幅主视觉：图片占 45–55%，另一半呈现一个主张与必要注释；保证图片裁切不伤主体。
-3. 证据页：一个大数字和单位为焦点，配小型趋势图与来源；不能虚构数据来填布局。
-4. 2×2 分组：信息确实并列时使用；每组的标题、图形和说明保持同一基线与边距。
-5. 流程页：3–5 个步骤，连接线说明方向；复杂机制改用 SVG 分层讲解。
-6. 对照页：两列相同尺度、相同指标、不同结论；先设共同基准再强调差异。
-
-## 页面知识表达
-
-公式用可编辑 LaTeX，不把公式截图；结构、流程、几何和关系用 SVG。数学符号应有含义说明；SVG 箭头不要穿过文字。图表、正文、公式保留为可编辑对象，生图仅承担插画与场景视觉。
-
-## 交付前检查
-
-首先检查文本被裁切、溢出、遮挡，然后检查对齐、重复布局、低对比度、错别字与模板占位内容。目录目标名称、顺序与章节一致；页数符合用户要求。切换后和重新载入后都应可读。图片缺失或模型调用失败不能以空占位冒充完成。
+# Visual composition and quality inspection
+Adapted from Anthropic's PPTX Design Ideas and Visual QA: https://github.com/anthropics/skills/blob/main/skills/pptx/SKILL.md . Apache-2.0 license retained in skills/licenses/anthropic-pptx-Apache-2.0.txt. This English adaptation targets editable HTML and does not use upstream Office conversion scripts.
+- Use content-specific visual anchors, coherent type hierarchy and varied compositions. Avoid repeating generic title-plus-bullets pages.
+- Group by meaning and align precisely. Comparisons need comparable scale; data needs labels, units and honest axes. Diagrams should explain relationships.
+- Preserve useful white space and wrapping room. Fix crowding by changing composition or copy before shrinking all text.
+- Let content determine chapter navigation and motion. Original HTML/SVG compositions are valid; fixed directory shapes do not limit the design.
+- Inspect actual pages with deck_capture_slide. Use whole-page images for composition and crops for type, formulas and labels. Combine pixels with IDs, bounds and overflow hints.
+- Apply targeted corrections, recapture and check nearby content. Test interaction, motion and exported playback when affected; report untested behavior explicitly.

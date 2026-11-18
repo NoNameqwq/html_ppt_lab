@@ -77,6 +77,9 @@ function bindEvents() {
   unsubs.push(bus.on('deck:change', () => scheduleRefresh()));
   unsubs.push(bus.on('deck:ready', () => scheduleRefresh()));
   unsubs.push(bus.on('deck:unload', () => { hide(); }));
+  unsubs.push(bus.on('editor:three-interaction',({active=false}={})=>{layer.classList.toggle('is-three-interacting',active);scheduleRefresh();}));
+  unsubs.push(bus.on('editor:three-ready',()=>scheduleRefresh()));
+  unsubs.push(bus.on('deck:unload',()=>layer.classList.remove('is-three-interacting')));
   unsubs.push(bus.on('editor:layout', () => scheduleRefresh()));
   unsubs.push(bus.on('editor:op', ({ op } = {}) => {
     if (!op) return;
@@ -145,6 +148,7 @@ function toDesign(clientX, clientY) {
 
 function onLayerPointerDown(e) {
   if (e.button !== 0 || !canInteract()) return;
+  if(forwardThreeUi(e)){e.preventDefault();e.stopPropagation();return;}
   unattendedPointerId = e.pointerId;
   const handle = e.target?.closest?.('[data-handle]');
   if (handle) {
@@ -157,6 +161,14 @@ function onLayerPointerDown(e) {
   // 点击命中层：选中元素（选中后进入待拖动状态）
   e.preventDefault();
   selectAtPoint(e);
+}
+function forwardThreeUi(e) {
+  const iframe=ctx?.getEditor?.()?.iframe;
+  if(!iframe?.contentDocument)return false;
+  const r=iframe.getBoundingClientRect(),x=(e.clientX-r.left)*iframe.clientWidth/r.width,y=(e.clientY-r.top)*iframe.clientHeight/r.height;
+  const target=[...iframe.contentDocument.querySelectorAll('[data-wds-three-ui] button,button[data-wds-three-ui]')].find(n=>{const rect=n.getBoundingClientRect();return rect.width&&rect.height&&x>=rect.left&&x<=rect.right&&y>=rect.top&&y<=rect.bottom;});
+  if(!target)return false;
+  target.click();return true;
 }
 
 async function selectAtPoint(e) {
@@ -190,7 +202,7 @@ function onLayerDblClick(e) {
   // 兼容模式：命中嵌套文本元素时优先编辑该文本（标题/段落），而不是整块 wrapper
   bridge.hitTest(pt.x, pt.y).then((hit) => {
     const elementId = hit?.textElementId || hit?.elementId;
-    if (!elementId) return;
+    if (!elementId) { bus.runCommand('insert.text', { at: pt }); return; }
     bus.emit('editor:begin-text', { elementId });
   }).catch(() => { /* ignore */ });
 }

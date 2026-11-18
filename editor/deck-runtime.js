@@ -29,6 +29,7 @@
   var autoTimer = null;
   var idleTimer = null;
   var listeners = new Map();
+  var surfaceOverrides = new WeakMap();
   var readyResolve;
   var ready = new Promise(function (r) { readyResolve = r; });
   /* ---------- 时间线（独立于分页，可跨页） ---------- */
@@ -80,6 +81,56 @@
     stage.style.setProperty('--s', s);
     // 让编辑器的 iframe 铺满时也能正确 letterbox
     document.documentElement.style.setProperty('--wpx-fit', s);
+  }
+
+  function setSurfaceProperty(node, property, value) {
+    var saved = surfaceOverrides.get(node);
+    if (!saved) { saved = {}; surfaceOverrides.set(node, saved); }
+    if (!(property in saved)) saved[property] = { value: node.style.getPropertyValue(property), priority: node.style.getPropertyPriority(property) };
+    node.style.setProperty(property, value, 'important');
+  }
+
+  function restoreSurfaceOverrides(node) {
+    var saved = node && surfaceOverrides.get(node);
+    if (!saved) return;
+    Object.keys(saved).forEach(function (property) {
+      var previous = saved[property];
+      if (previous.value) node.style.setProperty(property, previous.value, previous.priority);
+      else node.style.removeProperty(property);
+    });
+    surfaceOverrides.delete(node);
+    var canvas = $('.wpx-canvas', node);
+    var canvasSaved = canvas && surfaceOverrides.get(canvas);
+    if (!canvasSaved) return;
+    Object.keys(canvasSaved).forEach(function (property) {
+      var previous = canvasSaved[property];
+      if (previous.value) canvas.style.setProperty(property, previous.value, previous.priority);
+      else canvas.style.removeProperty(property);
+    });
+    surfaceOverrides.delete(canvas);
+  }
+
+  function ensureSurfaceVisible(slide, forceOpacity) {
+    [document.documentElement, document.body, app, stage].forEach(function (node) {
+      if (!node) return;
+      var style = getComputedStyle(node);
+      if (style.display === 'none') setSurfaceProperty(node, 'display', 'block');
+      if (style.visibility === 'hidden' || style.visibility === 'collapse') setSurfaceProperty(node, 'visibility', 'visible');
+      if (forceOpacity) setSurfaceProperty(node, 'opacity', '1');
+    });
+    if (!slide) return false;
+    var slideStyle = getComputedStyle(slide);
+    if (slideStyle.display === 'none') setSurfaceProperty(slide, 'display', 'block');
+    if (slideStyle.visibility === 'hidden' || slideStyle.visibility === 'collapse') setSurfaceProperty(slide, 'visibility', 'visible');
+    if (forceOpacity) setSurfaceProperty(slide, 'opacity', '1');
+    var canvas = $('.wpx-canvas', slide);
+    if (canvas) {
+      var canvasStyle = getComputedStyle(canvas);
+      if (canvasStyle.display === 'none') setSurfaceProperty(canvas, 'display', 'block');
+      if (canvasStyle.visibility === 'hidden' || canvasStyle.visibility === 'collapse') setSurfaceProperty(canvas, 'visibility', 'visible');
+      if (forceOpacity) setSurfaceProperty(canvas, 'opacity', '1');
+    }
+    return true;
   }
 
   function applyBgs() {
@@ -826,7 +877,7 @@
 
     if (instant || !prevEl) {
       /* 首屏 / 编辑 / 缩略图：直接显示；放映首屏也要先预置首帧再显示，避免抽搐 */
-      slides.forEach(function (s) { s.classList.remove('is-active'); });
+      slides.forEach(function (s) { s.classList.remove('is-active'); restoreSurfaceOverrides(s); });
       if (!instant) {
         setCanvasLive(nextEl, true);
         primeSlideAnims(nextEl);
@@ -845,7 +896,9 @@
       setCanvasLive(nextEl, true);
       primeSlideAnims(nextEl);
       applyCaptured(nextEl, false, { prime: true });
-      slides.forEach(function (s, i) { if (i !== current) s.classList.remove('is-active'); });
+      slides.forEach(function (s, i) {
+        if (i !== current) { s.classList.remove('is-active'); restoreSurfaceOverrides(s); }
+      });
       nextEl.classList.add('is-active');
       var duration = parseInt(nextEl.dataset.transitionDuration || '800', 10) || 800;
       applyTransitionFx(nextEl, duration);
@@ -854,7 +907,7 @@
       var custom = customTransitionFor(nextEl.dataset.transition);
       var navNode = prevEl && Array.from(prevEl.querySelectorAll('[data-wds-target]')).find(function (node) { return node.getAttribute('data-wds-target') === nextEl.getAttribute('data-id'); });
       var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      if (navNode && mode === 'present' && !reduceMotion) {
+      if (navNode && mode === 'present' && !reduceMotion && !navNode.closest('[data-wds-nav-transition="page"]')) {
         // Grow the chosen petal/orbit/chapter itself into the next scene. IDs
         // survive page reordering; no per-deck script or numeric links needed.
         prevEl.style.zIndex = '3'; nextEl.style.zIndex = '2'; navNode.style.zIndex = '99';
@@ -895,7 +948,10 @@
     /* 目标页已显示：释放预置动画（从第一帧开始播放，不闪终态） */
     releasePrimed();
     return task.then(function () {
-      slides.forEach(function (s, i) { if (i !== index) setCanvasLive(s, false); });
+      ensureSurfaceVisible(slides[current], true);
+      slides.forEach(function (s, i) {
+        if (i !== index) { setCanvasLive(s, false); restoreSurfaceOverrides(s); }
+      });
       paintHud();
       emit('slidechange', { index: current });
       return current;
@@ -962,6 +1018,7 @@
       });
       app.addEventListener('click', function (e) {
         if (e.button && e.button !== 0) return;
+        if(e.target.closest&&e.target.closest('[data-wds-three]'))return;
         if (e.target.closest && e.target.closest('.wpx-hud-btns,.wpx-ctx')) return;
         var actEl = e.target.closest && e.target.closest('[data-wpx-action]');
         if (actEl) {
@@ -975,6 +1032,7 @@
       });
       /* 右键：一定是自己的菜单，绝不是网页默认菜单 */
       document.addEventListener('contextmenu', function (e) {
+        if(e.target.closest&&e.target.closest('[data-wds-three]'))return;
         e.preventDefault();
         if (mode !== 'present') return;
         var el = e.target && e.target.closest ? e.target.closest('[data-wpx-el]') : null;
@@ -982,6 +1040,7 @@
       }, true);
       var wheelLock = false;
       window.addEventListener('wheel', function (e) {
+        if(e.target.closest&&e.target.closest('[data-wds-three]'))return;
         if (mouseMode === 'off') return;
         if (wheelLock || Math.abs(e.deltaY) < 24) return;
         wheelLock = true;
@@ -989,8 +1048,10 @@
         if (e.deltaY > 0) next(); else prev();
       }, { passive: true });
       var touchX = 0, touchY = 0;
-      window.addEventListener('touchstart', function (e) { touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }, { passive: true });
+      var threeTouch=false;
+      window.addEventListener('touchstart', function (e) {threeTouch=!!(e.target.closest&&e.target.closest('[data-wds-three]')); if(threeTouch)return;touchX = e.touches[0].clientX; touchY = e.touches[0].clientY; }, { passive: true });
       window.addEventListener('touchend', function (e) {
+        if(threeTouch||e.target.closest&&e.target.closest('[data-wds-three]'))return;
         var dx = e.changedTouches[0].clientX - touchX;
         var dy = e.changedTouches[0].clientY - touchY;
         if (Math.abs(dx) > 50 || Math.abs(dy) > 50) { if (Math.abs(dx) > Math.abs(dy)) { dx < 0 ? next() : prev(); } else { dy < 0 ? next() : prev(); } }
@@ -1030,7 +1091,8 @@
   function injectThumbStyle() {
     var st = document.createElement('style');
     st.id = 'wpx-thumb-force';
-    st.textContent = '*,*::before,*::after{animation-duration:.001s!important;animation-delay:0s!important;animation-iteration-count:1!important;animation-fill-mode:both!important;transition:none!important}';
+    // 艺术字作品要按真实节奏预览，不参与缩略图式的动画压扁。
+    st.textContent = '*,*::before,*::after:not([data-wds-type]):not([data-wds-type] *){animation-duration:.001s!important;animation-delay:0s!important;animation-iteration-count:1!important;animation-fill-mode:both!important;transition:none!important}';
     document.head.appendChild(st);
   }
 
@@ -1042,9 +1104,13 @@
     applyBgs();
     buildHud();
     fit();
-    slides.forEach(function (s, i) { s.classList.toggle('is-active', i === current); });
+    slides.forEach(function (s, i) {
+      s.classList.toggle('is-active', i === current);
+      if (i !== current) restoreSurfaceOverrides(s);
+    });
     var activeCanvas = slides[current] ? $('.wpx-canvas', slides[current]) : null;
     if (activeCanvas) activeCanvas.classList.add('live');
+    ensureSurfaceVisible(slides[current], true);
     paintHud();
     buildTimelineAnimations();
     return getState();
@@ -1054,6 +1120,7 @@
     app = $('#wpx-app');
     stage = $('#wpx-stage');
     if (!app || !stage) { readyResolve(); return; }
+    ensureSurfaceVisible(null);
     slides = $$('.wpx-slide', stage);
     document.body.classList.add('wpx-mode-' + mode);
     mouseMode = readMouseMode();
@@ -1073,6 +1140,7 @@
     }
     current = -1;
     go(start, { instant: mode !== 'present', force: true }).then(function () {
+      ensureSurfaceVisible(slides[current], true);
       buildTimelineAnimations();
       if (mode === 'present' && timeline && timeline.autoplay !== false && (timeline.tracks || []).length) {
         applyTimelineTime(timelinePageStart(current));
@@ -1165,6 +1233,7 @@
     timelineAnims.forEach(function (a) { try { a.anim.cancel(); } catch (e) { /* ignore */ } });
     timelineAnims = [];
     timeline = readTimeline();
+    if (window.__WPTL_CONTENT__) window.__WPTL_CONTENT__(timeline, document.getElementById('wpx-stage') || document.body);
     if (!timeline || !Array.isArray(timeline.tracks)) return;
     var total = Number(timeline.duration) || 8000;
     timeline.tracks.forEach(function (track) {
@@ -1247,6 +1316,11 @@
     mode: mode,
     init: init,
     getState: getState,
+    ensureVisible: function () { return ensureSurfaceVisible(slides[current], true); },
+    restorePresentationOverrides: function () {
+      [document.documentElement, document.body, app, stage].forEach(restoreSurfaceOverrides);
+      slides.forEach(restoreSurfaceOverrides);
+    },
     go: go,
     next: next,
     prev: prev,

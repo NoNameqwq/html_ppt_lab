@@ -79,9 +79,10 @@
 
   function ensureLayers(t) {
     killLayers();
+    if (window.__WPTL_CONTENT__) window.__WPTL_CONTENT__(t, stage());
     (t.tracks || []).forEach(function (track) {
       var selector = String(track.selector || '');
-      if (!selector || $(selector)) return;
+      if (!selector || track.hidden || $(selector)) return;
       var m = /data-wpx-tl\s*=\s*["']([^"']+)["']/.exec(selector);
       if (!m) return;
       var name = m[1];
@@ -103,7 +104,7 @@
     anims.forEach(function (a) { try { a.anim.cancel(); } catch (e) { /* ignore */ } });
     anims = [];
     data = readData();
-    if (!data || !Array.isArray(data.tracks)) return;
+    if (!data || !Array.isArray(data.tracks)) { killLayers();if(window.__WPTL_CONTENT__)window.__WPTL_CONTENT__(null,stage());return; }
     ensureLayers(data);
     var total = Number(data.duration) || 8000;
     data.tracks.forEach(function (track) {

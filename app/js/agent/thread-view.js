@@ -3,12 +3,13 @@ import { icon } from '../ui/icons.js';
 import { createStreamMarkdown } from './markdown.js';
 import { mergeContinuation } from './conversation.js';
 import { getToolMeta } from './tools.js';
+import { formatElapsed } from './generation-time.js';
 
 const glyph = (name, size = 15) => h('span', { class: 'agw-glyph', html: icon(name, size) });
 const button = (label, name, action) => h('button', { type: 'button', class: 'agw-icon', title: label, 'aria-label': label, onClick: action }, glyph(name));
 
-/** Plain prose and a single operation ledger. No per-round cards or assistant headers. */
-export function createThreadView({ streaming = false, scroll, resume, undo, versions, openProject }) {
+/** Chronological progress while running; one collapsible process and a visible final answer. */
+export function createThreadView({ streaming = false, scroll, resume, undo, versions, openProject, getElapsedMs }) {
   const el = h('article', { class: 'agw-turn', 'aria-label': '助手回复', 'data-running': String(streaming) });
   const ledger = h('details', { class: 'agw-ledger hidden', open: true });
   const ledgerLabel = h('span', {}, '正在处理');
@@ -28,11 +29,18 @@ export function createThreadView({ streaming = false, scroll, resume, undo, vers
   let previewCleanup=[];
   let part = null, continued = false, finished = false, incomplete = false, stopped = false, failureCount = 0;
   const started = performance.now();
+  let savedDuration=0,replayed=false;
+  function refreshTiming() {
+    if(!finished)return;
+    const elapsed=Number(getElapsedMs?.())||savedDuration||(replayed?0:performance.now()-started),duration=elapsed>0?'用时 '+formatElapsed(elapsed):'';
+    note.textContent=[stopped?'已停止':incomplete?'尚未完成':'',duration,stopped?'进度已保留':''].filter(Boolean).join(' · ');
+  }
   function beginRound() {
     if (continued && parts.length) { continued = false; part = parts.at(-1); part.carry = part.content; return; }
     closePart();
-    const md = h('div', { class: 'agw-prose hidden' }); el.insertBefore(md, deliveries);
+    const md = h('div', { class: 'agw-prose hidden' }); ledgerBody.append(md);
     part = { md, content: '', carry: '', stream: createStreamMarkdown(md, { minInterval: 60 }), thought: null }; parts.push(part);
+    ledger.classList.remove('hidden');
   }
   function current() { if (!part) beginRound(); return part; }
   function closePart() { if (part) { part.stream.finish(part.content); part = null; } }
@@ -45,11 +53,35 @@ export function createThreadView({ streaming = false, scroll, resume, undo, vers
     const label = h('span', { class: 'agw-operation-label' }, meta.label), targetLabel = h('span', { class: 'agw-operation-target' }, String(target)), mark = h('span', { class: 'agw-operation-mark' });
     detail.append(h('summary', {}, glyph(meta.kind === 'read' ? 'terminal' : 'edit'), label, targetLabel, mark));
     const more = h('div', { class: 'agw-operation-detail' }); detail.append(more); ledgerBody.append(detail);
+    const workerList=h('div',{class:'agw-workers hidden','aria-label':'并行子代理进度'}),workerRows=new Map();
+    detail.after(workerList);
+    const workerStates={pending:'等待中',running:'生成中',tool:'查看工程',complete:'已完成',error:'失败',stopped:'已停止'};
+    function setWorkers(workers=[]){
+      if(!workers.length)return;
+      workerList.classList.remove('hidden');
+      for(const worker of workers){
+        let row=workerRows.get(worker.id);
+        if(!row){
+          const node=h('details',{class:'agw-worker','data-state':worker.status||'pending'}),name=h('strong',{},worker.id),model=h('small',{}),state=h('span',{class:'agw-worker-state'}),body=h('div',{class:'agw-worker-body'}),task=h('p',{class:'agw-worker-task'}),output=h('pre',{class:'agw-worker-output'}),error=h('p',{class:'agw-worker-error',role:'status'});
+          node.append(h('summary',{},glyph('cpu',13),h('span',{class:'agw-worker-name'},name,model),state),body);body.append(task,output,error);workerList.append(node);
+          row={node,name,model,state,task,output,error,worker:null};
+          row.render=()=>{if(!node.open)return;task.textContent=row.worker.task||'';output.textContent=row.worker.content||'尚无输出';error.textContent=row.worker.error||'';};node.addEventListener('toggle',row.render);workerRows.set(worker.id,row);
+        }
+        const artifactLabel={svg:'SVG 绘图',three:'3D 建模',analysis:'分析核查'}[worker.artifact];
+        row.worker=worker;row.node.dataset.state=worker.status||'pending';row.name.textContent=[artifactLabel,worker.label||worker.role||'子代理',worker.id].filter(Boolean).join(' · ');row.model.textContent=worker.model||'';row.state.textContent=workerStates[worker.status]||worker.status;row.render();
+      }
+      const done=workers.filter(w=>w.status==='complete').length;
+      targetLabel.textContent=`${done}/${workers.length} 完成`;
+      scroll();
+    }
     let result = null, rendered = false;
     const render = () => {
       if (!detail.open || rendered) return; rendered = true;
       more.append(h('div', { class: 'agw-detail-label' }, call.function.name), h('pre', {}, JSON.stringify(args, null, 2)));
-      if (result) more.append(h('div', { class: 'agw-detail-label' }, '返回结果'), h('pre', {}, JSON.stringify(result, null, 2)));
+      if (result) {
+        more.append(h('div', { class: 'agw-detail-label' }, '返回结果'), h('pre', {}, JSON.stringify({...result,images:undefined,workers:undefined}, null, 2)));
+        for(const src of result.images||[])if(/^data:image\//.test(src))more.append(h('img',{class:'agw-capture-preview',src,alt:'Agent 查看的页面画面'}));
+      }
       if (result?.url) more.append(h('a', { href: result.url, target: '_blank', rel: 'noopener' }, '打开结果 ↗'));
       if (result?.opId) {
         const revert = h('button', { type: 'button', class: 'agw-text-button', onClick: async () => {
@@ -62,10 +94,15 @@ export function createThreadView({ streaming = false, scroll, resume, undo, vers
     detail.addEventListener('toggle', render);
     const row = {
       el: detail,
+      setWorkers,
       setState(state) { detail.dataset.state = state; ledgerLabel.textContent = meta.label + (target ? ' · ' + target : ''); scroll(); },
       setResult(value) {
-        result = value; detail.dataset.state = value?.ok === false || value?.error ? 'error' : 'done';
+        const wasError=detail.dataset.state==='error';
+        result = value; detail.dataset.state = value?.ok === false || value?.error ? 'error' : value?.status==='running'?'running':'done';
+        if(value?.workers)setWorkers(value.workers);
+        if(wasError)failureCount=Math.max(0,failureCount-1);
         if (detail.dataset.state === 'error') { mark.textContent = '失败'; failureCount++; }
+        else mark.textContent=detail.dataset.state==='running'?'后台运行':'';
         if (value?.summary) targetLabel.textContent = value.summary;
         rendered = false; more.replaceChildren(); render(); scroll();
       },
@@ -103,31 +140,43 @@ export function createThreadView({ streaming = false, scroll, resume, undo, vers
         ledger.classList.remove('hidden');
         const body = h('div', { class: 'agw-thought-text' }), label = h('span', {}, '思考中');
         p.thought = h('details', { class: 'agw-thought' }, h('summary', {}, glyph('brain', 14), label, glyph('chevron-down', 11)), body);
-        p.thought.body = body; p.thought.label = label; ledgerBody.append(p.thought);
+        p.thought.body = body; p.thought.label = label; ledgerBody.insertBefore(p.thought,p.md);
       }
       p.thought.body.textContent = text;
     },
     setToolCalls(calls) { (calls || []).forEach(ensureTool); },
     toolStart(call) { ensureTool(call).setState('running'); },
     toolResult(call, result) { ensureTool(call).setResult(result); },
+    parallelUpdate(event){const row=tools.get(event.toolCallId);if(row)row.setResult(event);},
     noteRoundEnd(msg, meta = {}) {
+      if(Number(msg.duration)>0)savedDuration=Number(msg.duration);
       const p = current();
       if (typeof msg.content === 'string') { p.content = msg.content; p.stream.finish(p.content); p.md.classList.toggle('hidden', !p.content); }
       if (p.thought) p.thought.label.textContent = '查看思考过程';
       incomplete = !!msg.incomplete || !!meta.incomplete; stopped = !!msg.aborted || !!meta.aborted;
     },
     finishRound(msg, meta) { this.noteRoundEnd(msg, meta); closePart(); },
+    setRole(meta) {
+      const p=current();
+      if(!p.role) {p.role=h('div',{class:'agw-role', 'data-role':meta.role},glyph(meta.role==='review'?'check-circle':'cpu',13),h('span',{},meta.label),h('small',{},meta.model||''));ledgerBody.insertBefore(p.role,p.thought||p.md);}
+    },
     continuation(info) { continued = true; ledgerLabel.textContent = info.unexpected ? '连接恢复中…' : '继续生成…'; },
-    reopen() { finished = false; incomplete = false; stopped = false; foot.classList.add('hidden'); el.dataset.running = 'true'; ledger.open = true; return this; },
+    reopen() { finished = false; incomplete = false; stopped = false; foot.classList.add('hidden'); el.dataset.running = 'true';for(const p of parts)if(p.md.parentNode===el){p.md.classList.remove('agw-final');ledgerBody.append(p.md);}ledger.open = true; return this; },
     disableResume() { again.classList.add('hidden'); },
+    refreshTiming,
     hasContent() { return parts.some((p) => p.content) || tools.size > 0; },
     finish(msg = {}, meta = {}) {
       if (finished) return; finished = true; closePart(); stopped ||= !!meta.aborted; incomplete ||= !!meta.incomplete;
       el.dataset.running = 'false';
+      // Only the last prose response stays outside the collapsed process. Earlier
+      // commentary, thoughts, and tools keep their original execution order.
+      const final=parts.findLast(p=>p.content);
+      if(final){final.md.classList.add('agw-final');el.insertBefore(final.md,deliveries);}
       ledgerLabel.textContent = tools.size ? `已执行 ${tools.size} 项操作${failureCount ? ' · ' + failureCount + ' 项失败' : ''}` : '查看思考过程';
-      ledger.open = failureCount > 0;
+      ledger.classList.toggle('hidden',!ledgerBody.querySelector('.agw-operation,.agw-thought,.agw-role')&&!parts.some(p=>p!==final&&p.content));
+      ledger.open = failureCount > 0 || incomplete || stopped;
       foot.classList.remove('hidden'); again.classList.toggle('hidden', !stopped && !incomplete);
-      note.textContent = stopped ? '已停止 · 进度已保留' : incomplete ? '尚未完成' : meta.replay ? '' : `${Math.max(1, Math.round((performance.now() - started) / 1000))} 秒`;
+      replayed=!!meta.replay;refreshTiming();
       if (!parts.some((p) => p.content) && !tools.size && !incomplete && !stopped) el.remove(); scroll();
     },
   };

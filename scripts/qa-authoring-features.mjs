@@ -98,9 +98,95 @@ try {
 
   const exec = (name,args) => ev(`(async()=>{return (await import('/app/js/agent/tools.js')).createToolExecutor(window.__WDS__).execute(${JSON.stringify(name)},${JSON.stringify(args)},{permission:'full'})})()`);
 
+  await step('统一 API 设置切换保留草稿，模型获取和搜索测试不保存，取消不启用生图', async () => {
+    const before = await json(base, '/api/settings');
+    await ev(`window.__WDS__.bus.runCommand('agent.openSettings')`);
+    await until(() => ev(`!!document.querySelector('.ais-dialog')`), '统一设置窗口');
+    assert.equal(await ev(`document.querySelectorAll('.ais-sections [role="tab"]').length`), 3);
+    await ev(`(()=>{const b=document.querySelector('[aria-label="对话 Base URL"]'),k=document.querySelector('[aria-label="对话 API Key"]');b.value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};b.dispatchEvent(new Event('input'));k.value='draft-chat-key';k.dispatchEvent(new Event('input'));document.querySelector('#ais-nav-search').click();document.querySelector('[aria-label="搜索 Base URL"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort)};document.querySelector('[aria-label="搜索 API Key"]').value='draft-search-key';[...document.querySelectorAll('.ais-search-form button')].find(b=>b.textContent==='测试搜索连接').click();})()`);
+    await until(()=>ev(`document.querySelector('.ais-search-form').textContent.includes('连接成功')`),'草稿搜索测试');
+    await ev(`document.querySelector('#ais-nav-image').click();document.querySelector('[aria-label="生图服务地址"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};document.querySelector('[aria-label="生图 API Key"]').value='fake-image-secret';document.querySelector('[aria-label="生图 API Key"]').dispatchEvent(new Event('input'));document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=true;`);
+    await until(()=>ev(`document.querySelector('.ais-image-form').textContent.includes('已发现 1 个生图模型')`),'草稿自动获取生图模型');
+    await ev(`document.querySelector('#ais-nav-chat').click()`);
+    assert.equal(await ev(`document.querySelector('[aria-label="对话 API Key"]').value`),'draft-chat-key');
+    await ev(`[...document.querySelectorAll('.ais-pane button')].find(b=>b.textContent==='测试对话连接').click()`);
+    await until(()=>ev(`document.querySelector('.ais-pane .ais-status').textContent.includes('连接成功')`),'草稿对话测试');
+    await ev(`document.querySelector('#ais-nav-search').click()`);
+    assert.equal(await ev(`document.querySelector('[aria-label="搜索 API Key"]').value`),'draft-search-key');
+    assert.equal(await ev(`document.querySelectorAll('.ais-dialog').length`),1);
+    await shot('settings-unified-search');
+    assert.deepEqual(await json(base,'/api/settings'),before);
+    await ev(`[...document.querySelectorAll('.ais-dialog .modal-foot button')].find(b=>b.textContent==='取消').click()`); await sleep(180);
+    assert.deepEqual(await json(base,'/api/settings'),before);
+    assert.equal((await json('http://127.0.0.1:'+modelPort,'/test/image-stats')).generatedImages,0);
+  });
+  await step('生图模型发现处理失败和旧请求竞态，旧凭据结果不会覆盖新结果', async () => {
+    await ev(`window.__WDS__.bus.runCommand('agent.openImageSettings')`);
+    await until(()=>ev(`!!document.querySelector('.ais-image-form')`),'生图分页');
+    await ev(`document.querySelector('[aria-label="生图服务地址"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};document.querySelector('[aria-label="生图 API Key"]').value='slow-key';document.querySelector('.ais-image-form .ais-actions button').click()`);
+    await sleep(120);
+    await ev(`document.querySelector('[aria-label="生图 API Key"]').value='fake-image-secret';document.querySelector('[aria-label="生图 API Key"]').dispatchEvent(new Event('input'))`);
+    await until(()=>ev(`document.querySelector('.ais-image-form').textContent.includes('已发现 1 个生图模型')`),'新凭据模型列表'); await sleep(600);
+    assert.equal(await ev(`document.querySelector('#ais-image-models option').value`),'gpt-image-1.5');
+    await ev(`document.querySelector('[aria-label="生图 API Key"]').value='bad-key';document.querySelector('[aria-label="生图 API Key"]').dispatchEvent(new Event('input'))`);
+    await until(()=>ev(`document.querySelector('.ais-image-form .ais-status').textContent.includes('HTTP 401')`),'模型获取失败提示');
+    assert.equal(await ev(`document.querySelectorAll('#ais-image-models option').length`),0);
+    await ev(`[...document.querySelectorAll('.ais-dialog .modal-foot button')].find(b=>b.textContent==='取消').click()`); await sleep(180);
+    const before=await json(base,'/api/settings');
+    const failed=await fetch(base+'/api/settings/user',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent:{temperature:1.2},imageGeneration:{enabled:true,baseUrl:'',clearKey:true}})});
+    assert.equal(failed.status,400);assert.deepEqual(await json(base,'/api/settings'),before);
+    const failedModels=await fetch(base+'/api/ai/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({providerId:'workspace-test',baseUrl:'http://127.0.0.1:'+modelPort+'/v1',apiKey:'bad-key'})});
+    assert.equal(failedModels.status,502);assert.equal((await failedModels.json()).models,undefined);
+  });
+  await step('聊天底部上下文详情支持鼠标、键盘、深浅主题和窄屏，不超出视口', async () => {
+    assert.deepEqual((await ev(`${L}.skills`)).sort(),['deck-narrative','html-deck-craft','motion-design']);
+    await ev(`window.__WDS__.bus.runCommand('agent.fullscreen',{open:true})`);await sleep(260);
+    const rect=await ev(`(()=>{const r=document.querySelector('.agw-context-button').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:rect.x,y:rect.y});await sleep(180);
+    assert(await ev(`!document.querySelector('.agw-context-detail').hidden`));
+    assert.equal(await ev(`document.querySelectorAll('.agw-context-row').length`),3);
+    const usage=await ev(`${L}.getState().context`);assert.equal(Object.values(usage.breakdown).reduce((a,b)=>a+b,0),usage.tokens);assert(usage.breakdown.tools>0);
+    assert.equal(await ev(`document.querySelector('.agw-context-ring .is-used').getAttribute('stroke-dashoffset')`),String(100-usage.percent));
+    assert.notEqual(await ev(`getComputedStyle(document.querySelector('.agw-context-ring .is-used')).stroke`),'none');
+    await shot('context-usage-desktop');
+    const color=await ev(`getComputedStyle(document.querySelector('.agw-context-detail')).backgroundColor`);
+    await ev(`window.__WDS__.bus.runCommand('app.toggleTheme')`);await sleep(160);
+    assert.notEqual(await ev(`getComputedStyle(document.querySelector('.agw-context-detail')).backgroundColor`),color);
+    await shot('context-usage-theme');
+    await cdp.send('Emulation.setDeviceMetricsOverride',{width:375,height:812,deviceScaleFactor:1,mobile:false});await sleep(150);
+    await ev(`document.querySelector('.agw-context-button').focus()`);
+    const box=await ev(`(()=>{const r=document.querySelector('.agw-context-detail').getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom}})()`);
+    assert(box.left>=0&&box.right<=375&&box.top>=0&&box.bottom<=812,JSON.stringify(box));
+    await shot('context-usage-mobile');
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+    assert(await ev(`document.querySelector('.agw-context-detail').hidden`));
+    assert(await ev(`document.querySelector('#agent-panel').dataset.fullscreen==='true'`));
+    await ev(`window.__WDS__.bus.runCommand('agent.openImageSettings')`);await until(()=>ev(`!!document.querySelector('.ais-dialog')`),'窄屏设置');
+    assert(await ev(`(()=>{const r=document.querySelector('.ais-dialog').getBoundingClientRect();return r.left>=0&&r.right<=375&&r.top>=0&&r.bottom<=812})()`));
+    await shot('settings-unified-mobile');
+    await ev(`[...document.querySelectorAll('.ais-dialog .modal-foot button')].find(b=>b.textContent==='取消').click()`);await sleep(180);
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+    await ev(`window.__WDS__.bus.runCommand('app.toggleTheme');window.__WDS__.bus.runCommand('agent.fullscreen',{open:false})`);await sleep(260);
+  });
+  await step('统一保存三个分页的配置，重新打开时空白密钥输入保留已存密钥', async () => {
+    await ev(`window.__WDS__.bus.runCommand('agent.openSettings')`);await until(()=>ev(`!!document.querySelector('.ais-dialog')`),'统一保存设置');
+    await ev(`document.querySelector('.ais-tab[data-pid="workspace-test"]').click();document.querySelector('[aria-label="对话 API Key"]').value='updated-chat-secret';document.querySelector('[aria-label="对话 API Key"]').dispatchEvent(new Event('input'));document.querySelector('#ais-nav-search').click();document.querySelector('[aria-label="搜索服务"]').value='tavily';document.querySelector('[aria-label="搜索服务"]').dispatchEvent(new Event('change'));document.querySelector('[aria-label="搜索 Base URL"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort)};document.querySelector('[aria-label="搜索 API Key"]').value='saved-search-secret';document.querySelector('[aria-label="搜索结果条数"]').value='7';document.querySelector('#ais-nav-image').click();document.querySelector('[aria-label="生图服务地址"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};document.querySelector('[aria-label="生图 API Key"]').value='saved-image-secret';document.querySelector('[aria-label="生图 API Key"]').dispatchEvent(new Event('input'))`);
+    await until(()=>ev(`document.querySelector('.ais-image-form').textContent.includes('已发现 1 个生图模型')`),'保存前发现模型');
+    await ev(`[...document.querySelectorAll('.ais-dialog .modal-foot button')].find(b=>b.textContent==='保存').click()`);
+    await until(()=>ev(`!document.querySelector('.ais-dialog')`),'统一保存完成');
+    const saved=await json(base,'/api/settings');assert.equal(saved.search.provider,'tavily');assert.equal(saved.search.maxResults,7);assert(saved.search.keySet);assert(saved.imageGeneration.configured);assert.equal(saved.imageGeneration.enabled,false);assert.equal(saved.imageGeneration.model,'auto');
+    assert.equal(saved.imageGeneration.models[0].id,'gpt-image-1.5');assert(!JSON.stringify(saved).includes('saved-image-secret'));assert(!JSON.stringify(saved).includes('updated-chat-secret'));
+    await ev(`window.__WDS__.bus.runCommand('agent.openImageSettings')`);await until(()=>ev(`!!document.querySelector('.ais-dialog')`),'再次打开设置');
+    assert.equal(await ev(`document.querySelector('[aria-label="生图 API Key"]').value`),'');
+    await ev(`[...document.querySelectorAll('.ais-dialog .modal-foot button')].find(b=>b.textContent==='保存').click()`);await until(()=>ev(`!document.querySelector('.ais-dialog')`),'保留密钥保存');
+    assert((await json(base,'/api/settings')).imageGeneration.configured);
+    assert.equal((await json(base,'/api/image-models',{})).source,'upstream');
+    assert.equal((await json(base,'/api/image-models?baseUrl=https%3A%2F%2Funused.example')).source,'upstream');
+  });
+
   await step('分组技能发现、开源来源与页内知识示例', async () => {
     const catalog = await json(base,'/api/skills');
-    for (const id of ['frontend-slides-layout','pptx-visual-composition','structured-navigation']) assert(catalog.skills.find((s)=>s.id===id)?.default);
+    assert.deepEqual(catalog.skills.filter(s=>s.default).map(s=>s.id).sort(),['deck-narrative','html-deck-craft','motion-design']);
     assert(!catalog.skills.some((s)=>s.id==='README')); assert(catalog.skills.find((s)=>s.id==='pptx-visual-composition').source.includes('anthropics'));
     assert.equal(await ev(`window.__WDS__.getEditor().iframe.contentDocument.querySelectorAll('.wpx-slide').length`),8);
     assert.equal(await ev(`window.__WDS__.getEditor().iframe.contentDocument.querySelectorAll('.katex').length`),2);
@@ -160,14 +246,16 @@ try {
     const rejected=await exec('app_call_api',{operation:'settings.write',body:{imageGeneration:{enabled:true}}});assert.equal(rejected.ok,false);
     const direct=await fetch(base+'/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({imageGeneration:{enabled:true}})});assert.equal(direct.status,403);
     await ev(`void import('/app/js/agent/image-settings.js').then(m=>m.openImageSettings(window.__WDS__))`);await sleep(150);
-    await ev(`document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=true;[...document.querySelectorAll('.image-settings-dialog button')].find(b=>b.textContent==='取消').click()`);await sleep(180);
+    await ev(`document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=true;[...document.querySelectorAll('.ais-dialog button')].find(b=>b.textContent==='取消').click()`);await sleep(180);
     assert.equal((await json(base,'/api/settings')).imageGeneration.enabled,false);
     assert.equal((await json('http://127.0.0.1:'+modelPort,'/test/image-stats')).generatedImages,0);
   });
   await step('用户手动配置开启后，Agent 生图自动入页、记录版本并可随 HTML 导出',async()=>{
     await ev(`void import('/app/js/agent/image-settings.js').then(m=>m.openImageSettings(window.__WDS__))`);await sleep(150);
-    await ev(`document.querySelector('[aria-label="生图服务地址"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};document.querySelector('[aria-label="生图模型"]').value='mock-image';document.querySelector('[aria-label="生图 API Key"]').value='fake-image-secret';document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=true;`);
-    await shot('authoring-image-settings');await ev(`[...document.querySelectorAll('.image-settings-dialog button')].find(b=>b.textContent==='保存设置').click()`);await sleep(250);
+    await ev(`document.querySelector('[aria-label="生图服务地址"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};document.querySelector('[aria-label="生图 API Key"]').value='fake-image-secret';document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=true;`);
+    await ev(`document.querySelector('[aria-label="生图 API Key"]').dispatchEvent(new Event('input',{bubbles:true}))`);
+    await until(()=>ev(`document.querySelector('.ais-image-form').textContent.includes('已发现 1 个生图模型')`),'自动获取图像模型');
+    await shot('authoring-image-settings');await ev(`[...document.querySelectorAll('.ais-dialog button')].find(b=>b.textContent==='保存').click()`);await sleep(250);
     assert.equal((await json(base,'/api/settings')).imageGeneration.enabled,true);assert(!JSON.stringify(await json(base,'/api/settings')).includes('fake-image-secret'));
     await newChat();await input('IMAGE_INSERT_TEST');await idle();
     assert(await ev(`${L}.messages.some(m=>m.role==='tool'&&m.name==='deck_generate_image'&&JSON.parse(m.content).ok)`));
@@ -176,10 +264,12 @@ try {
     const turn=await ev(`${L}.messages.find(m=>m.role==='user')`);assert(turn.versions[project.id].before);assert(turn.versions[project.id].after);
     const html=await (await fetch(base+'/api/projects/'+encodeURIComponent(project.id)+'/export')).text();assert(html.includes('data:image/png;base64'));assert(html.includes('data:font/woff2;base64'));assert(html.includes('data-wds-navigation'));assert(html.includes('go-id:'));
     assert.equal((await json('http://127.0.0.1:'+modelPort,'/test/image-stats')).generatedImages,1);
+    const generated=(await json('http://127.0.0.1:'+modelPort,'/test/image-stats')).imagePayloads[0];
+    assert.equal(generated.model,'gpt-image-1.5');assert.equal(generated.size,'1536x1024');assert.equal(generated.quality,'high');assert.equal(generated.background,'transparent');assert.equal(generated.output_format,'webp');assert.equal(generated.output_compression,85);
   });
   await step('用户关闭生图后立即禁止后续调用，已有页面内容保留',async()=>{
     await ev(`void import('/app/js/agent/image-settings.js').then(m=>m.openImageSettings(window.__WDS__))`);await sleep(150);
-    await ev(`document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=false;[...document.querySelectorAll('.image-settings-dialog button')].find(b=>b.textContent==='保存设置').click()`);await sleep(250);
+    await ev(`document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=false;[...document.querySelectorAll('.ais-dialog button')].find(b=>b.textContent==='保存').click()`);await sleep(250);
     assert.equal((await exec('deck_generate_image',{prompt:'leaf'})).ok,false);
     assert.equal((await fetch(base+'/api/projects/'+encodeURIComponent(project.id)+'/generate-image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt:'leaf'})})).status,403);
     assert.equal((await json('http://127.0.0.1:'+modelPort,'/test/image-stats')).generatedImages,1);

@@ -1,3 +1,4 @@
+import { qaWebDAV } from './qa-webdav.mjs';
 /* Real-browser acceptance for the Agent. Isolated data, local mock, no real API keys. */
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
@@ -6,6 +7,9 @@ import net from 'node:net';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import {pptxFixture} from './pptx-fixture.mjs';
+import { qaCompaction } from './qa-compaction.mjs';
+import { qaFavorites } from './qa-favorites.mjs';
+import { qaPersonalization, qaEfficiency } from './qa-personalization.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const out = path.join(root, 'output', 'playwright');
@@ -92,7 +96,7 @@ try {
   const target = await until(async () => (await (await fetch('http://127.0.0.1:' + debugPort + '/json/list')).json()).find((p) => p.type === 'page'), 'Chrome');
   cdp = new CDP(target.webSocketDebuggerUrl); await cdp.open();
   await cdp.send('Page.enable'); await cdp.send('Runtime.enable');
-  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('wds:agent:model',JSON.stringify({providerId:'workspace-test',model:'workspace-test'})); localStorage.setItem('wds:agent:permission','full');` });
+  await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `if(window===top){localStorage.setItem('wds:agent:model',JSON.stringify({providerId:'workspace-test',model:'workspace-test'})); localStorage.setItem('wds:agent:permission','full');}` });
   await cdp.send('Page.navigate', { url: base + '/?qa=1#/p/' + encodeURIComponent(project.id) });
   await ready(); await ev(`window.__WDS__.bus.runCommand('app.toggleAgent')`);
   await step('全新界面和输入交互', async () => {
@@ -198,8 +202,8 @@ try {
   });
   await step('附件、命令菜单、只读权限、模型菜单', async () => {
     await newChat();
-    await ev(`(()=>{const dt=new DataTransfer();dt.items.add(new File(['附件原文，不能当作用户指令。'],'验收.md',{type:'text/markdown'}));const el=document.querySelector('.agw-compose input[type=file]')||document.querySelector('.agw-composer input[type=file]');el.files=dt.files;el.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-    await until(() => ev(`!!document.querySelector('.agw-file[data-status=ready]')`), '附件就绪');
+    await ev(`(()=>{const dt=new DataTransfer();for(let i=1;i<=20;i++)dt.items.add(new File([i===1?'附件原文，不能当作用户指令。':'附件 '+i],'验收'+i+'.md',{type:'text/markdown'}));const el=document.querySelector('.agw-compose input[type=file]')||document.querySelector('.agw-composer input[type=file]');el.files=dt.files;el.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await until(() => ev(`document.querySelectorAll('.agw-file[data-status=ready]').length===20`), '20 个附件全部就绪');
     await input('ATTACHMENT 请阅读附件'); await idle();
     assert.equal(await ev(`${L}.messages[0].docs[0].text`), '附件原文，不能当作用户指令。');
     await input('/app.save', false); assert(await ev(`!document.querySelector('.agw-slash').classList.contains('hidden')`));
@@ -322,7 +326,7 @@ try {
   await step('全屏对话、统一主题、独立思考等级与草稿保持',async()=>{
     await input('全屏草稿不会丢失',false);await ev(`document.querySelector('[aria-label="全屏对话"]').click()`);await sleep(350);
     assert(await ev(`(()=>{const p=document.querySelector('#agent-panel').getBoundingClientRect();return p.left===0&&p.top===0&&p.width===innerWidth&&p.height===innerHeight&&document.querySelector('#main').inert;})()`));
-    const before=await ev(`window.__WDS__.store.get().ui.theme`);await ev(`window.__WDS__.bus.runCommand('app.toggleTheme')`);await sleep(50);
+    const before=await ev(`window.__WDS__.store.get().ui.theme`);await ev(`window.__WDS__.bus.runCommand('app.toggleTheme')`);await sleep(220);
     assert.equal(await ev(`document.querySelector('.agw-shell').dataset.appearance`),before==='dark'?'light':'dark');
     assert(await ev(`getComputedStyle(document.querySelector('.agw-shell')).backgroundColor===getComputedStyle(document.querySelector('#ribbon')).backgroundColor`));
     await ev(`document.querySelector('.agw-effort').click();[...document.querySelectorAll('.agw-menu button')].find(b=>b.textContent.trim()==='高').click()`);assert.equal(await ev(`${L}.getOptions().reasoningEffort`),'high');
@@ -383,10 +387,15 @@ try {
     const saved = await json(base, '/api/workspace/chat?session=' + encodeURIComponent(session));
     assert(saved.messages.at(-1).content.includes('对话保留在工作区'));
   });
+  await step('独立上下文压缩模型可选择、保存、刷新并实际分段调用', () => qaCompaction({ ev, cdp, until, shot, baseUrl:'http://127.0.0.1:'+modelPort+'/v1',providerId:'workspace-test',model:'workspace-test',mode:'backend' }));
+  await step('元素收藏支持跨工程素材、预览、撤销重做及聊天工具交付',()=>qaFavorites({ev,cdp,until,shot,mode:'backend'}));
+  await step('WebDAV 挂载、ZIP 备份、云端列表与完整恢复可在浏览器使用',()=>qaWebDAV({ev,cdp,until,shot,mode:'backend'}));
+  await step('界面字体、快速生成、关闭思考和实时计时可操作并持久化',()=>qaEfficiency({ev,cdp,until,shot,mode:'backend',providerId:'workspace-test',model:'workspace-test'}));
+  await step('华丽动效、项目归档、供应商名称和聊天模型名单可操作并持久化',()=>qaPersonalization({ev,cdp,until,shot,mode:'backend',baseUrl:'http://127.0.0.1:'+modelPort+'/v1',providerId:'workspace-test',model:'workspace-test'}));
   await step('浏览器无 JavaScript 错误', async () => { assert.deepEqual(report.errors, []); });
 } catch (error) {
   report.fatal = error.stack; console.error(error.stack);
-  try { await shot('agent-workspace-failure'); console.error(await ev(`document.querySelector('#agent-panel')?.innerText`)); } catch {}
+  try { await shot('agent-workspace-failure'); console.error(await ev(`document.querySelector('#agent-panel')?.innerText?.slice(-6000)`)); } catch {}
   process.exitCode = 1;
 } finally {
   await fs.mkdir(out, { recursive: true }); await fs.writeFile(path.join(out, 'agent-workspace-report.json'), JSON.stringify(report, null, 2));

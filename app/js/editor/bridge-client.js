@@ -24,7 +24,7 @@ function pickParam(value, ...keys) {
 export class BridgeClient {
   constructor(iframe, options = {}) {
     this.iframe = iframe || null;
-    this.origin = options.origin || location.origin;
+    this.origin = options.origin || (location.protocol === 'file:' || location.origin === 'null' ? '*' : location.origin);
     this.timeout = options.timeout || DEFAULT_TIMEOUT;
     this._seq = 0;
     this._pending = new Map();
@@ -106,7 +106,8 @@ export class BridgeClient {
       }, this.timeout);
       this._pending.set(id, { resolve, reject, timer, method });
       try {
-        win.postMessage({ type: 'wpx:req', id, method, params: params || {} }, this.origin);
+        const payload = window.__WDS_STATIC__?.documents.bridgeParams(this.iframe, method, params) || params || {};
+        win.postMessage({ type: 'wpx:req', id, method, params: payload }, this.origin);
       } catch (err) {
         clearTimeout(timer);
         this._pending.delete(id);
@@ -234,7 +235,7 @@ export class BridgeClient {
     return this.call('hitTest', { x, y });
   }
 
-  beginTextEdit(elementId) { return this.call('beginTextEdit', { elementId: pickParam(elementId, 'elementId') }); }
+  beginTextEdit(elementId, selectAll = false) { return this.call('beginTextEdit', { elementId: pickParam(elementId, 'elementId'), selectAll }); }
   endTextEdit() { return this.call('endTextEdit'); }
   execTextCommand(command, value) {
     if (isPlainObject(command) && value === undefined) return this.call('execTextCommand', command);

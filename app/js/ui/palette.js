@@ -30,7 +30,7 @@ const FALLBACK_META = {
   'app.zoomReset': ['画布缩放到 100%', '视图', 'refresh'],
   'app.zoomFit': ['适应窗口', '视图', 'fit'],
   'app.commandPalette': ['命令面板', '应用', 'command', 'Ctrl+K'],
-  'app.settings': ['AI 设置', '应用', 'sparkles'],
+  'app.settings': ['API 设置', '应用', 'sparkles'],
   'app.toggleTheme': ['切换深色 / 浅色', '视图', 'moon'],
   'app.reloadDeck': ['重新加载画布', '应用', 'refresh'],
   'file.new': ['新建工程', '文件', 'plus'],

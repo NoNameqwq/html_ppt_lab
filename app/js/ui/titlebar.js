@@ -1,6 +1,6 @@
 /* 顶部标题栏（52px 单行）：品牌 / 路由感知操作区 + Ribbon 标签挂载点
  *
- * 文件库：品牌、搜索（bus 事件 library:search）、新建、导入、命令面板、AI 设置、主题、帮助
+ * 文件库：品牌、搜索（bus 事件 library:search）、新建、导入、命令面板、API 设置、主题、帮助
  * 编辑器：品牌、返回、工程名（双击行内重命名）、保存状态、撤销/重做、
  *         醒目的 Agent 主按钮、放映（拆分）、更多菜单；
  *         中间 `#titlebar-tabs` 是 Ribbon 标签条的挂载点（ribbon.js 通过 ctx.ribbon.mountTabs() 挂入）。
@@ -152,7 +152,8 @@ function buildLibrary() {
     h('span', { class: 'tb-sep' }),
     iconBtn({ name: 'command', tip: '命令面板', kbd: 'Ctrl K', onClick: () => cmd('app.commandPalette') }),
     iconBtn({ name: 'terminal', tip: '打开 Agent', kbd: 'Ctrl Shift E', onClick: () => cmd('app.toggleAgent') }),
-    iconBtn({ name: 'sparkles', tip: 'AI 设置', onClick: () => cmd('app.settings') }),
+    iconBtn({name:'cloud',tip:'WebDAV 云端备份',onClick:()=>cmd('backup.open')}),
+    iconBtn({ name: 'sparkles', tip: 'API 设置', onClick: () => cmd('app.settings') }),
     themeBtn,
     iconBtn({ name: 'help', tip: '快捷键与帮助', onClick: () => cmd('help.shortcuts') }),
   );
@@ -298,6 +299,7 @@ function buildEditor() {
           { sep: true },
           { label: '历史记录', icon: 'history', onClick: () => cmd('history.open') },
           { label: '重新加载画布', icon: 'refresh', onClick: () => cmd('app.reloadDeck') },
+          {label:'WebDAV 云端备份',icon:'cloud',onClick:()=>cmd('backup.open')},
           { label: '应用设置', icon: 'settings', onClick: () => cmd('app.settings') },
           { sep: true },
           { label: dark ? '切换到浅色模式' : '切换到深色模式', icon: dark ? 'sun' : 'moon', onClick: () => cmd('app.toggleTheme') },
@@ -532,7 +534,7 @@ function registerShellCommands(ctx) {
   }, { label: '命令面板', group: '应用', icon: 'command', shortcut: 'Ctrl+K', keywords: ['命令', '搜索', 'palette'] });
 
   reg('app.settings', () => bus.runCommand('agent.openSettings'), {
-    label: 'AI 设置', group: '应用', icon: 'sparkles', keywords: ['模型', 'API', '密钥'],
+    label: 'API 设置', group: '应用', icon: 'sparkles', keywords: ['模型', 'API', '密钥'],
   });
 
   reg('view.dark', () => bus.runCommand('app.toggleTheme'), {

@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readSSE } from '../app/js/core/sse.js';
 import { isSendableMessage } from '../app/js/core/chat-messages.js';
+import { applyReasoning, reasoningDisabled } from './reasoning.mjs';
 
 function openAIMessage(m) {
   if (m.role === 'assistant') {
@@ -53,6 +54,9 @@ async function postCompatible(url, headers, payload, signal) {
     if (res.ok) return res;
     const detail = await res.text();
     if ([400, 422].includes(res.status)) {
+      if (reasoningDisabled(payload) && /reasoning_effort|enable_thinking|\bthinking\b/i.test(detail)) {
+        throw Object.assign(new Error('当前模型服务不支持此关闭思考参数。请选择支持关闭思考的模型，或将思考强度改为「自动」。服务返回：' + detail.slice(0, 400)), { status: res.status });
+      }
       const removable = ['temperature', 'reasoning_effort', 'stream_options', 'tool_choice'].find((key) => key in payload && detail.includes(key));
       if (removable) { delete payload[removable]; continue; }
       if ('max_tokens' in payload && /max_completion_tokens/.test(detail)) {
@@ -99,10 +103,10 @@ export async function proxyChat({ req, res, wire, headers, base, ...options }) {
     const outbound = messages.filter(isSendableMessage);
     const payload = anthropic ? anthropicPayload({ ...options, messages: outbound }) : { model, messages: outbound.map(openAIMessage), stream, max_tokens: maxTokens, temperature };
     if (!anthropic) {
-      if (reasoningEffort) payload.reasoning_effort = reasoningEffort;
       if (tools.length) { payload.tools = tools; payload.tool_choice = toolChoice ? { type: 'function', function: { name: toolChoice } } : 'auto'; }
       if (stream) payload.stream_options = { include_usage: true };
     }
+    applyReasoning(payload, { reasoningEffort, wire, model, base });
     const upstream = await postCompatible(base + (anthropic ? '/messages' : '/chat/completions'), headers, payload, controller.signal);
     touch();
     if ((upstream.headers.get('content-type') || '').includes('application/json')) {

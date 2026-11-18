@@ -3,29 +3,13 @@ id: layout-typography
 name: 版式与字体层级
 desc: 网格、字号层级、留白与对齐规范
 category: design
-default: true
+default: false
 ---
-# 版式与字体层级（1920×1080）
-
-## 网格
-- 画布 1920×1080；安全边距 64px（封面可 96–120px 更有气势），内容区约 1792×952。
-- 8px 基线：坐标与间距尽量取 8 的倍数；常用档位 8/16/24/32/48/64/96。
-- 12 栏网格：栏宽约 128px + 24px 槽；两栏版面左栏约 744px、右栏约 936px。
-
-## 字号层级
-- 封面主标题 120–220（短中文/数字 180–220，长句 96–140）。
-- 页面标题 72–120；章节数字 160–260（作背景装饰时降低不透明度）。
-- 副标题/导语 40–56；正文 28–40（默认 32）；注释/页码 22–26。
-- 同页字号不超过 3 级（标题/正文/注释），层级差 ≥ 1.5 倍才明显。
-- 大标题行高 1.1–1.2，正文 1.5–1.7；大标题字距 -0.01em~-0.02em，正文 0。
-
-## 排版原则
-- 标题左对齐 + 正文左对齐最稳；居中只用于封面/金句/数字页。
-- 一页一个视觉重心：要么大标题，要么大图，要么大数字，不要三足鼎立。
-- 留白：内容占画布面积 40%–60%；元素之间至少 32px；正文行宽 24–36 个汉字。
-- 图文并列时对齐同一基线或同一条边线；叠图时文字压在暗部并加渐变遮罩。
-- 中文用衬线字体显气质，英文/数字统一同一字体；数字字号与同级标题一致或更大。
-- 三条对齐线（左边缘、标题基线、图片底边）对齐，版面立刻干净。
-
-## 常见错误
-正文小于 24px、标题 40px 还堆字加粗；元素贴边（<48px）；同页出现 5 种字号；正文行距 <1.3；居中大段文字超过 3 行；标题与正文同字号同粗细。
+# Layout and typography
+Build a system for the actual content, then refine it from rendered pixels.
+- Start with a 1920 by 1080 logical stage, 64–120 px margins and an 8 px spacing rhythm. Change the grid when the subject warrants it; do not default to equal card grids.
+- Body type often works at 28–40 px, notes 22–26 px, titles 72–120 px and hero type 120–220 px. Adjust to viewing distance and actual rendering.
+- Choose available fonts with fonts_list / deck_auto_fonts. Keep CJK and Latin fallbacks and the user's content language.
+- Give wrapping room; align baselines and optical edges. Allow for descenders, math and diacritics. Fix crowding through composition before shrinking all text.
+- Vary page composition while keeping type and spacing tokens consistent.
+- Capture the actual page with deck_capture_slide. Combine pixels with returned IDs, bounds, font sizes and overflow hints. Adjust specific coordinates or styles, then capture again.

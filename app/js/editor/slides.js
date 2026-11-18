@@ -109,6 +109,7 @@ function buildPanel() {
 }
 
 function bindEvents() {
+  unsubs.push(bus.on('editor:three-ready',({index}={})=>scheduleInvalidate(index)));
   unsubs.push(bus.on('deck:change', () => syncFromStore()));
   unsubs.push(bus.on('deck:ready', () => onDeckReady()));
   unsubs.push(bus.on('slide:change', ({ index } = {}) => setCurrent(index)));

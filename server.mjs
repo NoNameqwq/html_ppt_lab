@@ -17,7 +17,12 @@ import { deckDocument } from './server/deck-document.mjs';
 import { templateStore } from './server/templates.mjs';
 import { convertPowerPoint } from './server/powerpoint.mjs';
 import { API_CATALOG } from './app/js/agent/api-catalog.js';
-import { DEFAULT_IMAGE_SETTINGS, publicImageSettings, updateImageSettings, generateImage } from './server/image-generation.mjs';
+import { favoriteStore } from './server/favorites.mjs';
+import { webDAVService, workspaceGate } from './server/webdav-service.mjs';
+import { webDAVResponse } from './app/js/core/webdav-api.js';
+import { normalizeVisibleModels } from './app/js/core/model-visibility.js';
+import { archivePatch } from './app/js/core/project-archive.js';
+import { DEFAULT_IMAGE_SETTINGS, publicImageSettings, updateImageSettings, discoverImageModels, generateImage } from './server/image-generation.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const APP_DIR = path.join(ROOT, 'app');
@@ -27,12 +32,16 @@ const SKILLS_DIR = path.join(ROOT, 'skills');
 const SAMPLES_DIR = path.join(ROOT, 'samples');
 const PROJECTS_DIR = process.env.WDS_PROJECTS_DIR ? path.resolve(process.env.WDS_PROJECTS_DIR) : path.join(ROOT, 'projects');
 const DATA_DIR = process.env.WDS_DATA_DIR ? path.resolve(process.env.WDS_DATA_DIR) : path.join(ROOT, 'data');
+const WORKSPACE_ID = crypto.createHash('sha256').update([ROOT, DATA_DIR, PROJECTS_DIR].join('\0')).digest('hex').slice(0, 16);
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const favorites = favoriteStore(path.join(DATA_DIR, 'elements'));
 const MODELS_CACHE_FILE = path.join(DATA_DIR, 'models-dev.json');
 const PORT = Number(process.env.PORT || 4321);
 const HOST = process.env.HOST || '127.0.0.1';
 const VERSION = '1.0.0';
 const startedAt = Date.now();
+const backupGate=workspaceGate();
+let cloud;
 const templateLibrary=templateStore({customRoot:path.join(DATA_DIR,'templates'),builtinRoot:TEMPLATES_DIR});
 const sharedDeckFile=async(rel)=>{
   if(!rel.startsWith('/editor/')&&!rel.startsWith('/app/vendor/'))return null;
@@ -84,6 +93,56 @@ async function readJson(p, fallback = null) {
 async function writeJson(p, data) {
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, JSON.stringify(data, null, 2), 'utf8');
+}
+
+/* ---------- 汉字笔画数据（艺术字「笔画书写 / 拆解」用） ---------- */
+const HANZI_DIR = path.join(APP_DIR, 'vendor', 'hanzi');
+const hanziSets = new Map();
+/**
+ * 解码 scripts/pack-hanzi.mjs 的紧凑格式，按字符建索引并缓存。
+ * strokes: [n, d1…dn, n, …]  medians: [nLines, len, x, y, …, …]  radicals: [n, i1…in, …]
+ */
+async function loadHanziStrokes(set = 'common') {
+  const key = set === 'full' ? 'full' : 'common';
+  if (hanziSets.has(key)) return hanziSets.get(key);
+  const raw = JSON.parse(await fs.readFile(path.join(HANZI_DIR, `strokes-${key}.json`), 'utf8'));
+  const chars = Array.from(String(raw.chars || ''));
+  const map = { size: chars.length, data: new Map() };
+  let sp = 0, mp = 0, rp = 0;
+  for (const char of chars) {
+    const strokeCount = raw.strokes[sp++];
+    const strokes = raw.strokes.slice(sp, sp + strokeCount);
+    sp += strokeCount;
+    const lineCount = raw.medians[mp++];
+    const medians = [];
+    for (let i = 0; i < lineCount; i++) {
+      const len = raw.medians[mp++];
+      const line = [];
+      for (let j = 0; j < len; j++) { line.push(raw.medians[mp++], raw.medians[mp++]); }
+      medians.push(line);
+    }
+    const radCount = raw.radicals[rp++];
+    const radStrokes = raw.radicals.slice(rp, rp + radCount);
+    rp += radCount;
+    map.data.set(char, { strokes, medians, radStrokes });
+  }
+  hanziSets.set(key, map);
+  return map;
+}
+function pickHanzi(set, text) {
+  const out = { chars: '', strokes: {}, medians: {}, radicals: {}, missing: [] };
+  const seen = new Set();
+  for (const char of Array.from(String(text))) {
+    if (seen.has(char) || /\s/.test(char)) continue;
+    seen.add(char);
+    const item = set.data.get(char);
+    if (!item) { out.missing.push(char); continue; }
+    out.chars += char;
+    out.strokes[char] = item.strokes;
+    out.medians[char] = item.medians;
+    out.radicals[char] = item.radStrokes;
+  }
+  return out;
 }
 function defaultSettings() {
   return {
@@ -286,7 +345,7 @@ async function createProject({ name, templateId = 'blank' }) {
   };
   await writeJson(path.join(dir, 'project.json'), project);
   await writeJson(path.join(dir, '.history.json'), { ops: [], updatedAt: ts });
-  await writeJson(path.join(dir, '.chat.json'), { messages: [], skills: [], updatedAt: ts });
+  await writeJson(path.join(dir, '.chat.json'), { messages: [], updatedAt: ts });
   log('创建工程', id, project.name);
   return project;
 }
@@ -397,7 +456,7 @@ async function importProject({ fileName, content, sourcePath, sampleId, name, mo
   };
   await writeJson(path.join(dir, 'project.json'), project);
   await writeJson(path.join(dir, '.history.json'), { ops: [], updatedAt: ts });
-  await writeJson(path.join(dir, '.chat.json'), { messages: [], skills: [], updatedAt: ts });
+  await writeJson(path.join(dir, '.chat.json'), { messages: [], updatedAt: ts });
   log('导入工程', id, finalName, '资源', copied.length);
   return project;
 }
@@ -410,7 +469,7 @@ async function duplicateProject(id) {
   const newId = genId(newName);
   const dst = projectDir(newId);
   await fs.cp(src, dst, { recursive: true, filter: (s) => !s.includes(path.sep + '.versions') });
-  const newMeta = { ...meta, id: newId, name: newName, createdAt: now(), updatedAt: now() };
+  const newMeta = { ...meta, id: newId, name: newName, archived: false, archivedAt: 0, createdAt: now(), updatedAt: now() };
   await writeJson(path.join(dst, 'project.json'), newMeta);
   return newMeta;
 }
@@ -495,7 +554,7 @@ function publicProvider(p) {
   const key = settingsKey || envKey || '';
   return {
     id: p.id, name: p.name, baseUrl: p.baseUrl, keyEnv: p.keyEnv, wire: p.wire || 'openai',
-    model: p.model || '', models: p.models || [],
+    model: p.model || '', models: p.models || [], visibleModels: normalizeVisibleModels(p.visibleModels),
     keySet: Boolean(key),
     keySource: settingsKey ? 'settings' : envKey ? 'env' : null,
     masked: key ? key.slice(0, 3) + '…' + key.slice(-4) : '',
@@ -537,9 +596,11 @@ function publicSearchSettings(settings) {
   };
 }
 
-async function handleSearch(body = {}) {
+async function handleSearch(body = {}, draft = null) {
   const settings = await getSettings();
-  const cfg = settings.search || {};
+  const cfg = { ...settings.search, ...(draft || {}) };
+  if (draft?.clearKey) cfg.apiKey = '';
+  else if (draft && !draft.apiKey?.trim()) cfg.apiKey = settings.search?.apiKey || '';
   const provider = cfg.provider === 'tavily' ? 'tavily' : 'deepseek';
   const query = String(body.query || '').trim();
   if (!query) throw Object.assign(new Error('缺少搜索词 query'), { status: 400 });
@@ -587,9 +648,11 @@ async function handleSearch(body = {}) {
   }));
   return { ok: true, provider, query, count: results.length, results };
 }
-async function updateSettings(patch = {}) {
-  if (Object.hasOwn(patch, 'imageGeneration')) throw Object.assign(new Error('生图配置只能由用户在「生图设置」中保存，Agent 不可代为开启'), { status: 403 });
+async function updateSettings(patch = {}, userInitiated = false) {
+  if (Object.hasOwn(patch, 'imageGeneration') && !userInitiated) throw Object.assign(new Error('生图配置只能由用户在「API 设置 → 生图」中保存，Agent 不可代为开启'), { status: 403 });
   const settings = await getSettings();
+  // Validate before writing anything so the three sections are saved together.
+  if (patch.imageGeneration) settings.imageGeneration = updateImageSettings(settings.imageGeneration, patch.imageGeneration);
   if (patch.ui) settings.ui = { ...settings.ui, ...patch.ui };
   if (patch.agent) settings.agent = { ...settings.agent, ...patch.agent };
   if (patch.search) {
@@ -613,6 +676,7 @@ async function updateSettings(patch = {}) {
       }
       for (const k of ['name', 'baseUrl', 'keyEnv', 'model', 'wire']) if (incoming[k] !== undefined) p[k] = incoming[k];
       if (Array.isArray(incoming.models)) p.models = incoming.models;
+      if (incoming.visibleModels !== undefined) p.visibleModels = normalizeVisibleModels(incoming.visibleModels);
       if (incoming.clearKey) p.apiKey = '';
       else if (typeof incoming.apiKey === 'string' && incoming.apiKey.trim()) p.apiKey = incoming.apiKey.trim();
     }
@@ -782,6 +846,7 @@ ${styles}
 </head><body class="wpx-body wpx-thumb-body">
 <div id="wpx-app" data-w="1920" data-h="1080"><div id="wpx-stage">${slide}</div></div>
 <script>document.documentElement.style.setProperty('--s', Math.min(innerWidth/1920, innerHeight/1080));</script>
+${/data-wds-three(?:[\s="'\\>]|$)/i.test(slide)?'<script data-wds-runtime="three" src="/editor/three-runtime.js"></script>':''}
 </body></html>`;
 }
 
@@ -914,13 +979,7 @@ async function fetchModelList({ providerId, baseUrl, apiKey }) {
   } else {
     source = 'no-key';
   }
-  if (!rawModels.length) {
-    const fallback = provider.id === 'deepseek'
-      ? ['deepseek-chat', 'deepseek-reasoner']
-      : ['deepseek-v4.1-flash', 'claude-sonnet-4-5', 'gpt-5'];
-    rawModels = fallback.map((id) => ({ id, name: id }));
-    if (source === 'no-key') source = 'preset';
-  }
+  if (!rawModels.length) throw Object.assign(new Error(source.startsWith('error:') ? '获取模型失败，请检查 API Key、Base URL 和网络（' + source.slice(6) + '）' : '服务没有返回模型，请检查 API Key 或手动填写模型 ID'), { status: 502 });
   const dev = await loadModelsDev();
   const models = rawModels.map((m) => normalizeModel(m.id || m.model || m.name, m, findModelsDevEntry(dev, m.id || m.model || m.name)));
   models.sort((a, b) => Number(b.recommended) - Number(a.recommended) || a.name.localeCompare(b.name));
@@ -964,9 +1023,10 @@ function chatSessionId(base, body, messages) {
   }
 }
 
-async function handleChat(req, res, body) {
+async function handleChat(req, res, body, draft = null) {
   const settings = await getSettings();
-  const provider = resolveProvider(settings, body.providerId);
+  const storedProvider = settings.providers.find((p) => p.id === body.providerId);
+  const provider = draft ? { ...storedProvider, ...draft, apiKey: draft.clearKey ? '' : draft.apiKey?.trim() || storedProvider?.apiKey || '' } : resolveProvider(settings, body.providerId);
   if (!provider) return fail(res, 400, '未知 provider');
   const base = String(provider.baseUrl || '').replace(/\/+$/, '');
   const key = providerKey(provider);
@@ -1059,6 +1119,9 @@ async function serveProjectFile(req, res, id, relPath) {
   const isIndex = path.basename(target).toLowerCase() === 'index.html';  if (isIndex && (wpx === 'edit' || wpx === 'capture')) {
     let html = await fs.readFile(target, 'utf8').catch(() => null);
     if (html == null) return fail(res, 404, '文件不存在');
+    html=html.replace(/<script\b[^>]*data-wds-runtime=["'](?:timeline-content|presentation-tools|three|three-bundle)["'][^>]*>[\s\S]*?<\/script>/gi,'');
+    const contentRuntime='<script data-wds-runtime="timeline-content" src="/editor/timeline-content.js"></script><script data-wds-runtime="three" src="/editor/three-runtime.js"></script><script data-wds-runtime="type" src="/editor/type-runtime.js"></script>';
+    html=/<head\b/i.test(html)?html.replace(/<head\b[^>]*>/i,m=>m+contentRuntime):contentRuntime+html;
     if (wpx === 'edit') {
       html = html.replace(/<script[^>]*id=["']wpx-bridge["'][^>]*>\s*<\/script>/gi, '');
       const project = await readProject(id).catch(() => null);
@@ -1088,24 +1151,10 @@ async function serveProjectFile(req, res, id, relPath) {
   }
   // 兼容模式（raw）：放映页注入编辑补丁 + 时间线 + 放映外壳（原稿 HTML 不动，动效完整）
   if (isIndex && relPath === 'index.html') {
-    const project = await readProject(id).catch(() => null);
-    if (project && project.kind === 'raw') {
-      const patches = await readRawPatches(id);
-      const timeline = await readRawTimeline(id);
-      let tags = '';
-      if (patches.length) tags += rawPatchTags(patches, null);
-      if (timeline) tags += rawTimelineTags(timeline, null);
-      const deckConfig = await readRawDeck(id);
-      tags += rawDeckTags(deckConfig);
-      tags += '<script src="/editor/present-shell.js"></script>';
-      let html = await fs.readFile(target, 'utf8').catch(() => null);
-      if (html != null) {
-        html = html.includes('</body>') ? html.replace('</body>', tags + '\n</body>') : html + tags;
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-        res.end(html);
-        return;
-      }
-    }
+    const html = await deckDocument({read:rel=>fs.readFile(path.join(dir,safeRel(rel))).catch(()=>null),shared:sharedDeckFile,base:`/p/${enc(id)}/`});
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(html);
+    return;
   }
   const ok = await serveStatic(res, target);
   if (!ok) fail(res, 404, '文件不存在');
@@ -1120,10 +1169,21 @@ const server = http.createServer(async (req, res) => {
   try { url = new URL(req.url, 'http://localhost'); } catch { return fail(res, 400, 'Bad URL'); }
   const pathname = decodeURIComponent(url.pathname);
   const method = req.method.toUpperCase();
+  let releaseWorkspace;
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
 
   try {
+    if(pathname.startsWith('/api/webdav/')){
+      const body=['PUT','POST'].includes(method)?await readJsonBody(req,16000):{};
+      const response=await webDAVResponse(cloud.manager,url.href,method,body,cloud.readRecovery);
+      res.writeHead(response.status,Object.fromEntries(response.headers));return res.end(Buffer.from(await response.arrayBuffer()));
+    }
+    if(pathname.startsWith('/api/')&&['POST','PUT','PATCH','DELETE'].includes(method)){
+      const job=cloud.manager.status();
+      if(job.busy&&job.operation==='restore')return fail(res,423,'云端备份正在恢复，请完成并刷新后再修改工作区');
+      releaseWorkspace=await backupGate.enter();
+    }
     /* ---------- 静态 ---------- */
     if (pathname === '/' || pathname === '/index.html') {
       return serveStatic(res, path.join(APP_DIR, 'index.html'), { noStore: true });
@@ -1162,7 +1222,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
 
     /* ---------- API ---------- */
-    if (pathname === '/api/health') return json(res, 200, { ok: true, version: VERSION, uptime: now() - startedAt });
+    if (pathname === '/api/health') return json(res, 200, { ok: true, app: 'webdeck-studio', launcher: 1, workspace: WORKSPACE_ID, version: VERSION, uptime: now() - startedAt });
     if (pathname === '/api/projects' && method === 'GET') return json(res, 200, { projects: await listProjects() });
     if (pathname === '/api/projects' && method === 'POST') {
       const body = await readJsonBody(req);
@@ -1177,6 +1237,20 @@ const server = http.createServer(async (req, res) => {
       const body = await readJsonBody(req);
       return json(res, 200, await updateSettings(body));
     }
+    if (pathname === '/api/settings/user' && method === 'PUT') return json(res, 200, await updateSettings(await readJsonBody(req), true));
+    if (pathname === '/api/settings/test-search' && method === 'POST') {
+      const body = await readJsonBody(req, 16000);
+      return json(res, 200, await handleSearch({ query: 'presentation design', count: 1 }, body));
+    }
+    if (pathname === '/api/settings/test-chat' && method === 'POST') {
+      const body = await readJsonBody(req, 16000);
+      return handleChat(req, res, { providerId: body.id, model: body.model, temperature: 0, maxTokens: 24, messages: [{ role: 'user', content: '请只回复 OK' }] }, body);
+    }
+    if (pathname === '/api/image-models' && method === 'POST') {
+      const body = await readJsonBody(req, 16000), settings = await getSettings();
+      return json(res, 200, await discoverImageModels(settings.imageGeneration, body));
+    }
+    if (pathname === '/api/image-models' && method === 'GET') return json(res, 200, await discoverImageModels((await getSettings()).imageGeneration));
     // Deliberately separate from the Agent's writable settings API.
     if (pathname === '/api/image-settings' && method === 'PUT') {
       const body = await readJsonBody(req, 16000), settings = await getSettings();
@@ -1192,6 +1266,15 @@ const server = http.createServer(async (req, res) => {
       if (method === 'PUT') return json(res, 200, await saveChat(DATA_DIR, session, await readJsonBody(req, 80 * 1024 * 1024)));
     }
     if (pathname === '/api/skills' && method === 'GET') return json(res, 200, { skills: await listSkills() });
+    if (pathname === '/api/elements' && method === 'GET') return json(res, 200, { elements: await favorites.list() });
+    if (pathname === '/api/elements' && method === 'POST') return json(res, 200, { element: await favorites.save(await readJsonBody(req, 32 * 1024 * 1024)) });
+    const favoriteMatch = /^\/api\/elements\/([^/]+)$/.exec(pathname);
+    if (favoriteMatch) {
+      const id = decodeURIComponent(favoriteMatch[1]);
+      if (method === 'GET') return json(res, 200, { element: await favorites.read(id) });
+      if (method === 'PATCH') return json(res, 200, { element: await favorites.update(id, await readJsonBody(req)) });
+      if (method === 'DELETE') { await favorites.remove(id); return json(res, 200, { ok: true }); }
+    }
     if (pathname === '/api/templates' && method === 'GET') return json(res, 200, { templates: await listTemplates() });
     if (pathname === '/api/imports' && method === 'POST') {
       const body=await readJsonBody(req,60*1024*1024),bytes=decodeUpload(body.dataUrl),fileName=String(body.fileName||'');
@@ -1207,6 +1290,17 @@ const server = http.createServer(async (req, res) => {
     const templateRoute=/^\/api\/templates\/([^/]+)(\/export)?$/.exec(pathname);
     if(templateRoute){const id=templateRoute[1];if(templateRoute[2]&&method==='GET'){const data=await templateLibrary.exportZip(id);res.writeHead(200,{'Content-Type':'application/zip','Content-Disposition':`attachment; filename*=UTF-8''${enc(id)}.zip`});return res.end(data);}if(method==='PATCH')return json(res,200,{template:await templateLibrary.update(id,await readJsonBody(req))});if(method==='DELETE'){await templateLibrary.remove(id);return json(res,200,{ok:true});}}
     if (pathname === '/api/samples' && method === 'GET') return json(res, 200, { samples: await listSamples() });
+    if (pathname === '/api/hanzi' && method === 'GET') {
+      const text = String(url.searchParams.get('chars') || '').slice(0, 400);
+      const set = url.searchParams.get('set') === 'full' ? 'full' : 'common';
+      if (!text.trim()) return json(res, 200, { ok: true, chars: '', strokes: {}, medians: {}, radicals: {} });
+      try {
+        const strokes = await loadHanziStrokes(set);
+        return json(res, 200, { ok: true, set, ...pickHanzi(strokes, text) });
+      } catch (err) {
+        return fail(res, 503, '笔画数据不可用：' + (err?.message || err) + '。请运行 node scripts/pack-hanzi.mjs 生成数据。');
+      }
+    }
     if (pathname === '/api/fs/list' && method === 'GET') return json(res, 200, await fsList(url.searchParams.get('path') || ''));
     if (pathname === '/api/fs/read' && method === 'GET') {
       const target = path.resolve(url.searchParams.get('path') || '');
@@ -1294,6 +1388,7 @@ const server = http.createServer(async (req, res) => {
         if (!project) return fail(res, 404, '工程不存在');
         const allowed = ['name', 'kind', 'slideCount', 'theme', 'cover', 'coverFg', 'coverAccent', 'origin'];
         for (const k of allowed) if (body[k] !== undefined) project[k] = body[k];
+        Object.assign(project, archivePatch(project, body));
         project.updatedAt = now();
         await writeJson(path.join(dir, 'project.json'), project);
         return json(res, 200, { project });
@@ -1424,6 +1519,7 @@ const server = http.createServer(async (req, res) => {
     if (res.headersSent) { try { res.end(); } catch { /* ignore */ } return; }
     fail(res, status, err.message || '服务器错误');
   } finally {
+    releaseWorkspace?.();
     if (process.env.WDS_LOG !== '0') {
       const ms = now() - started;
       if (ms > 250 || pathname.startsWith('/api/')) log(req.method, pathname, res.statusCode, ms + 'ms');
@@ -1432,8 +1528,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 await ensureDirs();
+cloud=await webDAVService({projectsRoot:PROJECTS_DIR,dataRoot:DATA_DIR,getSettings,gate:backupGate});
+cloud.manager.startScheduler();
 server.listen(PORT, HOST, () => {
   log(`WebDeck Studio 已启动 → http://${HOST}:${PORT}`);
   log(`工程目录: ${PROJECTS_DIR}`);
 });
-process.on('SIGINT', () => { log('正在关闭…'); server.close(() => process.exit(0)); });
+process.on('SIGINT', () => { cloud.manager.stopScheduler(); log('正在关闭…'); server.close(() => process.exit(0)); });

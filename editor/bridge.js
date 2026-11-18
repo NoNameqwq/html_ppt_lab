@@ -27,6 +27,36 @@
   var rawTimerPatched = false;
   var rawLoadedPatches = [];
   var rawHitLayer = null;
+  // Older running servers may inject the latest bridge without the newer 3D
+  // runtime. Resolve from this script, never from the user's project base URL.
+  var threeRuntimeUrl = window.__WDS_THREE_RUNTIME_URL__ || (document.currentScript && document.currentScript.src ? new URL('three-runtime.js',document.currentScript.src).href : '/editor/three-runtime.js');
+  var threeRuntimeLoading = null;
+  function threeLoadNotice(message,retry) {
+    document.querySelectorAll('[data-wds-three]').forEach(function(host){
+      host.querySelectorAll('[data-wds-three-generated="bootstrap"]').forEach(function(node){node.remove();});
+      var notice=document.createElement('div');notice.setAttribute('data-wds-three-generated','bootstrap');notice.setAttribute('role','status');
+      notice.style.cssText='position:absolute;inset:0;display:grid;place-content:center;gap:12px;padding:24px;box-sizing:border-box;text-align:center;font:18px/1.5 system-ui,sans-serif;color:inherit;background:#80808018;';
+      var text=document.createElement('span');text.textContent=message;notice.appendChild(text);
+      if(retry){var button=document.createElement('button');button.type='button';button.textContent='重新加载 3D';button.addEventListener('click',refreshThree);notice.appendChild(button);}
+      host.appendChild(notice);
+    });
+  }
+
+  function ensureThreeRuntime() {
+    if (!document.querySelector('[data-wds-three]')) return Promise.resolve(null);
+    if (window.__WDS_THREE__) return window.__WDS_THREE__.refresh().then(function(){return window.__WDS_THREE__;});
+    if (threeRuntimeLoading) return threeRuntimeLoading;
+    threeLoadNotice('正在加载 3D 视图…');
+    threeRuntimeLoading = new Promise(function(resolve,reject){
+      var script=document.createElement('script'),timer;
+      function failed(){clearTimeout(timer);script.remove();threeRuntimeLoading=null;var message='3D 运行时加载失败，请重新加载画布或重启 BAT 服务。';threeLoadNotice(message,true);reject(new Error(message));}
+      script.src=threeRuntimeUrl;script.setAttribute('data-wds-runtime','three');
+      script.onload=function(){clearTimeout(timer);if(!window.__WDS_THREE__){failed();return;}window.__WDS_THREE__.refresh().then(function(){resolve(window.__WDS_THREE__);},failed);};
+      script.onerror=failed;timer=setTimeout(failed,15000);document.head.appendChild(script);
+    });
+    return threeRuntimeLoading;
+  }
+  function refreshThree() { ensureThreeRuntime().catch(function(error){emit('threeerror',{message:error.message});}); }
 
   /* ======================================================================
      基础工具
@@ -37,6 +67,7 @@
   function post(msg) { try { parent.postMessage(msg, PARENT_ORIGIN); } catch (e) { } }
   function emit(event, data) { post({ type: 'wpx:event', event: event, data: data }); }
   function emitChange(op) {
+    refreshThree();
     if (op && RAW_MODE) {
       try {
         if (!op.rawLoc && op.elementId) {
@@ -168,6 +199,7 @@
     function block(e) {
       if (e.__wpxNav) return;
       var t = e.target;
+      if (isThreeUi(t)) return;
       if (t && t.isContentEditable) return;
       if (t && t.closest && t.closest('.wpx-hud')) return;
       e.stopPropagation();
@@ -270,6 +302,12 @@
     layer.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:transparent;cursor:default';
     ['pointerdown', 'pointerup', 'click', 'dblclick', 'touchstart', 'touchend'].forEach(function (type) {
       layer.addEventListener(type, function (e) {
+        if (type === 'pointerdown' && clickThreeUiAt(e.clientX,e.clientY)) { e.stopImmediatePropagation(); return; }
+        if (type === 'dblclick') {
+          var hit = rawEventHit(e);
+          if (!hit) blankDoubleClick(e);
+          else { try { beginTextEdit(hit.textElementId || hit.elementId); } catch (err) {} }
+        }
         e.stopImmediatePropagation();
       }, true);
     });
@@ -296,6 +334,12 @@
   function rawEventHit(e) {
     var sr = stageRect();
     return hitAt((e.clientX - sr.left) / sr.scale, (e.clientY - sr.top) / sr.scale);
+  }
+
+  function blankDoubleClick(e) {
+    var sr = stageRect();
+    var x = (e.clientX - sr.left) / sr.scale, y = (e.clientY - sr.top) / sr.scale;
+    if (x >= 0 && y >= 0 && x < 1920 && y < 1080) emit('blankdblclick', { x: x, y: y });
   }
 
   /** 兼容模式：加速原稿的转场计时器（编辑导航用，不影响放映原文件） */
@@ -349,10 +393,11 @@
       if (!op || !op.type) return;
       var loc = op.rawLoc;
       try {
-        if (op.type === 'html' || op.type === 'text') {
-          if (loc && op.after) out.push({ type: 'html', slide: loc.slide, path: loc.path, html: op.after.html });
-        } else if (op.type === 'style') {
-          if (loc && op.after) out.push({ type: 'style', slide: loc.slide, path: loc.path, cssText: op.after.cssText });
+        if (op.type === 'html' || op.type === 'text' || op.type === 'style') {
+          if (loc && op.after) {
+            if (op.after.html != null) out.push({ type: 'html', slide: loc.slide, path: loc.path, html: op.after.html });
+            if (op.after.cssText != null) out.push({ type: 'style', slide: loc.slide, path: loc.path, cssText: op.after.cssText });
+          }
         } else if (op.type === 'attr') {
           if (loc && op.after) out.push({ type: 'attr', slide: loc.slide, path: loc.path, attrs: op.after.attrs || {} });
         } else if (op.type === 'anim') {
@@ -550,6 +595,7 @@
   }
 
   function detectType(el) {
+    if(el.matches('[data-wds-three]')||el.querySelector('[data-wds-three]'))return 'html';
     if (!el) return 'html';
     var tag = el.tagName.toLowerCase();
     if (tag === 'img') return 'image';
@@ -563,6 +609,7 @@
 
   function hasText(el) {
     if (!el) return false;
+    if(el.matches('[data-wds-three]')||el.querySelector('[data-wds-three]'))return false;
     if (el.querySelector('img,svg,canvas,video')) return Boolean((el.innerText || '').trim());
     return Boolean((el.innerText || '').trim()) || Boolean(el.querySelector('p,h1,h2,h3,h4,h5,h6,span,div'));
   }
@@ -770,7 +817,7 @@
   /* ======================================================================
      文字编辑
      ====================================================================== */
-  function beginTextEdit(elementId) {
+  function beginTextEdit(elementId, selectAll) {
     var el = elementById(elementId);
     if (!el) throw new Error('元素不存在: ' + elementId);
     if (el.dataset.wpxLocked === '1') throw new Error('元素已锁定');
@@ -784,9 +831,10 @@
     try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
     var range = document.createRange();
     range.selectNodeContents(el);
-    range.collapse(false);
+    if (!selectAll) range.collapse(false);
     var sel = window.getSelection();
     if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+    textEdit.range = range.cloneRange();
     emit('textedit', { editing: true, elementId: el.dataset.wpxEl, slideIndex: textEdit.slideIndex });
     return { ok: true };
   }
@@ -817,12 +865,77 @@
     return { op: op };
   }
 
-  function execTextCommand(command, value) {
-    if (textEdit) {
-      try { document.execCommand(command, false, value == null ? null : String(value)); } catch (e) { return { ok: false, error: e.message }; }
-      return { ok: true };
+  function commitTypedText() {
+    if (!textEdit || textEdit.beforeHtml === textEdit.el.innerHTML) return null;
+    var t = textEdit;
+    var op = makeOp({ type: 'html', label: '编辑文字', elementId: t.elementId, slideIndex: t.slideIndex,
+      before: { html: t.beforeHtml }, after: { html: t.el.innerHTML } });
+    t.beforeHtml = t.el.innerHTML;
+    emitChange(op);
+    return op;
+  }
+
+  // Pixel sizes must never pass through execCommand's legacy 1–7 font scale.
+  function applyPixelSize(el, value, range) {
+    var size = parseFloat(value);
+    if (!isFinite(size) || size < 1 || size > 1000) throw new Error('字号应在 1–1000 像素之间');
+    var whole = !range || range.collapsed;
+    if (range && !whole) {
+      var full = document.createRange(); full.selectNodeContents(el);
+      whole = range.toString() === full.toString();
     }
-    return { ok: false, error: '当前不在文字编辑状态' };
+    if (whole) {
+      el.style.setProperty('font-size', size + 'px', 'important');
+      Array.from(el.querySelectorAll('*')).forEach(function (node) {
+        if (node.closest('svg,.katex,[data-wds-latex]')) return;
+        node.style.setProperty('font-size', 'inherit', 'important'); node.removeAttribute('size');
+      });
+      return;
+    }
+    var pieces = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT), node;
+    while ((node = walker.nextNode())) {
+      if (!node.textContent || !range.intersectsNode(node) || node.parentElement.closest('svg,.katex,[data-wds-latex]')) continue;
+      var start = node === range.startContainer ? range.startOffset : 0;
+      var end = node === range.endContainer ? range.endOffset : node.length;
+      if (end > start) pieces.push({ node: node, start: start, end: end });
+    }
+    var spans = [];
+    pieces.forEach(function (p) {
+      if (p.end < p.node.length) p.node.splitText(p.end);
+      var text = p.start ? p.node.splitText(p.start) : p.node;
+      var span = document.createElement('span'); span.style.setProperty('font-size', size + 'px', 'important');
+      text.parentNode.insertBefore(span, text); span.appendChild(text); spans.push(span);
+    });
+    if (spans.length) {
+      var selected = document.createRange(); selected.setStartBefore(spans[0]); selected.setEndAfter(spans[spans.length - 1]);
+      var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(selected);
+      if (textEdit) textEdit.range = selected.cloneRange();
+    }
+  }
+
+  function execTextCommand(command, value) {
+    if (!textEdit) return { ok: false, error: '当前不在文字编辑状态' };
+    commitTypedText();
+    var t = textEdit, el = t.el, before = { html: el.innerHTML, cssText: el.style.cssText };
+    try {
+      el.focus({ preventScroll: true });
+      var range = t.range, sel = window.getSelection();
+      if (range && el.contains(range.commonAncestorContainer)) { sel.removeAllRanges(); sel.addRange(range); }
+      if (command === 'fontSize') applyPixelSize(el, value, range);
+      else if (command === 'lineHeight') el.style.lineHeight = String(value);
+      else if (command === 'letterSpacing') el.style.letterSpacing = String(value);
+      else {
+        document.execCommand('styleWithCSS', false, true);
+        if (!document.execCommand(command === 'fontFamily' ? 'fontName' : command, false, value == null ? null : String(value))) return { ok: false };
+      }
+    } catch (e) { return { ok: false, error: e.message }; }
+    var after = { html: el.innerHTML, cssText: el.style.cssText }, op = null;
+    if (before.html !== after.html || before.cssText !== after.cssText) {
+      op = makeOp({ type: 'html', label: '文字格式', elementId: t.elementId, slideIndex: t.slideIndex, before: before, after: after });
+      t.beforeHtml = after.html; emitChange(op);
+      emit('selectionchange', { selection: selectionInfo(el) });
+    }
+    return { ok: true, op: op };
   }
 
   /* ======================================================================
@@ -848,6 +961,18 @@
   function setStyles(elementId, styles) {
     var el = elementById(elementId);
     if (!el) throw new Error('元素不存在');
+    if (styles && styles['font-size']) {
+      if (textEdit && textEdit.el === el) commitTypedText();
+      var before = { html: el.innerHTML, cssText: el.style.cssText };
+      applyPixelSize(el, styles['font-size']);
+      Object.keys(styles).forEach(function (k) { if (k !== 'font-size') el.style.setProperty(k, String(styles[k])); });
+      var after = { html: el.innerHTML, cssText: el.style.cssText };
+      if (before.html === after.html && before.cssText === after.cssText) return { op: null };
+      var sizeOp = makeOp({ type: 'style', label: '修改字号', elementId: elementId, slideIndex: slideIndexOf(el), before: before, after: after });
+      if (textEdit && textEdit.el === el) textEdit.beforeHtml = after.html;
+      emitChange(sizeOp); emit('selectionchange', { selection: selectionInfo(el) });
+      return { op: sizeOp };
+    }
     var op = styleMutate(el, function (node) {
       Object.keys(styles || {}).forEach(function (key) {
         var v = styles[key];
@@ -903,6 +1028,26 @@
     if (!el) throw new Error('元素不存在');
     var op = styleMutate(el, function () { setRotate(el, deg || 0); }, '旋转元素');
     return { op: op };
+  }
+
+  function absoluteSize(params) {
+    var el=elementById(params.elementId);
+    if(!el)throw new Error('元素不存在');
+    if(el.dataset.wpxLocked==='1')throw new Error('元素已锁定');
+    var rect=rectInStage(el), w=Number(params.w), h=Number(params.h);
+    if(!(w>0)&&!(h>0))throw new Error('请填写大于 0 的目标像素尺寸');
+    var sx=w>0?w/rect.w:h/rect.h, sy=h>0?h/rect.h:sx;
+    if(params.keepRatio!==false)sy=sx;
+    if(!isFinite(sx)||!isFinite(sy)||sx<=0||sy<=0||sx>100||sy>100)throw new Error('目标尺寸超出可缩放范围');
+    var op=styleMutate(el,function(){
+      var cs=getComputedStyle(el),parts=String(cs.scale||'none').split(/\s+/),ax=parseFloat(parts[0])||1,ay=parseFloat(parts[1])||ax;
+      var tr=parseTranslate(el);
+      el.style.setProperty('scale',String(Math.round(ax*sx*1000000)/1000000)+' '+String(Math.round(ay*sy*1000000)/1000000));
+      // Preserve the visible top-left even with centered transform origins.
+      var next=rectInStage(el);setTranslate(el,tr.x+rect.x-next.x,tr.y+rect.y-next.y);
+    },'调整整体绝对大小');
+    setSelected(el);
+    return {op:op,rect:rectInStage(el)};
   }
 
   /* ---------- 连续变换（拖动/缩放/旋转预览） ---------- */
@@ -1054,6 +1199,11 @@
     var canvas = canvasOf(slide);
     if (!canvas) throw new Error('幻灯片结构异常');
     var el = makeElement(spec || {});
+    if(RAW_MODE&&el.querySelector('[data-wds-three]')){
+      el.setAttribute('data-wds-three-raw-scale','');
+      el.style.position='absolute';
+      el.style.boxSizing='border-box';
+    }
     canvas.appendChild(el);
     var index = Array.prototype.indexOf.call(canvas.children, el);
     var op = makeOp({
@@ -1072,9 +1222,9 @@
   /** 把一段元素 HTML 插入指定页（用于「复制到所有页」等批量操作） */
   function insertElementHtml(params) {
     params = params || {};
-    if (RAW_MODE) throw new Error('兼容模式不支持批量插入（原稿结构可能不同）');
+    if (RAW_MODE && !params.favorite) throw new Error('兼容模式不支持批量插入（原稿结构可能不同）');
     var index = params.slideIndex != null ? params.slideIndex : currentIndex;
-    var slide = slides[index];
+    var slide = RAW_MODE ? activeSlide() : slides[index];
     if (!slide) throw new Error('幻灯片不存在');
     var canvas = canvasOf(slide);
     if (!canvas) throw new Error('幻灯片结构异常');
@@ -1097,6 +1247,7 @@
       after: { index: pos, html: node.outerHTML, slideId: slide.dataset.id },
     });
     emitChange(op);
+    if (params.favorite) setSelected(node);
     return { elementId: node.dataset.wpxEl, op: op };
   }
 
@@ -1123,6 +1274,7 @@
     if (!el) throw new Error('元素不存在');
     var canvas = canvasOf(el.closest('.wpx-slide'));
     var clone = el.cloneNode(true);
+    cleanThreeTree(clone);
     reassignIds(clone);
     var t = parseTranslate(clone);
     setTranslate(clone, t.x + 24, t.y + 24);
@@ -1143,13 +1295,90 @@
   function getElementHtml(elementId) {
     var el = elementById(elementId);
     if (!el) throw new Error('元素不存在');
-    return { html: el.outerHTML };
+    return { html: sourceHtml(el) };
+  }
+
+  function captureFavorite(elementId) {
+    if (textEdit) endTextEdit();
+    var el = elementById(elementId);
+    if (!el) throw new Error('请先选择要收藏的元素');
+    var clone = el.cloneNode(true), originals = [el].concat(Array.from(el.querySelectorAll('*'))), copies = [clone].concat(Array.from(clone.querySelectorAll('*')));
+    if (originals.length > 2500) throw new Error('元素结构过大，请选择更小的部分收藏');
+    var css = [], animations = new Set(), fonts = new Set(), prefix = 'favorite-' + genId('p');
+    function localReferences(value) {
+      return value.replace(/url\(\s*(['"]?)(.*?)\1\s*\)/g, function (all, quote, url) {
+        try {
+          var resolved = new URL(url, document.baseURI), current = new URL(document.baseURI);
+          if (resolved.hash && resolved.origin === current.origin && resolved.pathname === current.pathname && resolved.search === current.search && el.querySelector('[id="' + CSS.escape(decodeURIComponent(resolved.hash.slice(1))) + '"]')) return 'url(' + resolved.hash + ')';
+        } catch (e) {}
+        return all;
+      });
+    }
+    originals.forEach(function (source, i) {
+      var selected = source.classList.contains('wpx-selected'), hovered = source.classList.contains('wpx-hover');
+      source.classList.remove('wpx-selected', 'wpx-hover');
+      try {
+      var target = copies[i], cs = getComputedStyle(source);
+      target.removeAttribute('contenteditable'); target.classList.remove('wpx-selected', 'wpx-hover');
+      // Freeze the element's actual appearance, including inherited styles and
+      // resolved CSS variables, without copying unrelated slide styles/scripts.
+      var properties = Array.from(cs).filter(function (key) { return !key.startsWith('--') && !['caret-color', 'cursor'].includes(key); });
+      properties.forEach(function (key) { target.style.setProperty(key, localReferences(cs.getPropertyValue(key))); });
+      fonts.add(cs.fontFamily);
+      cs.animationName.split(',').forEach(function (name) { animations.add(name.trim()); });
+      ['before', 'after'].forEach(function (kind) {
+        var ps = getComputedStyle(source, '::' + kind);
+        if (!ps.content || ps.content === 'none' || ps.content === 'normal') return;
+        var token = prefix + '-' + i; target.setAttribute('data-favorite-pseudo', token);
+        var rules = Array.from(ps).filter(function (key) { return !key.startsWith('--'); }).map(function (key) { return key + ':' + localReferences(ps.getPropertyValue(key)) + ';'; }).join('');
+        css.push('[data-favorite-pseudo="' + token + '"]::' + kind + '{' + rules + '}');
+      });
+      Array.from(target.attributes).forEach(function (a) { if (/^on/i.test(a.name) || a.name === 'srcdoc') target.removeAttribute(a.name); });
+      if (source.tagName === 'IMG') { target.setAttribute('src', source.currentSrc || source.src); target.removeAttribute('srcset'); }
+      ['src', 'poster'].forEach(function (key) { var value = target.getAttribute(key); if (value && !value.startsWith('data:')) target.setAttribute(key, new URL(value, document.baseURI).href); });
+      if (source.namespaceURI === 'http://www.w3.org/2000/svg' && source.tagName.toLowerCase() === 'image') {
+        ['href','xlink:href'].forEach(function (key) { var value=target.getAttribute(key); if(value&&!value.startsWith('data:'))target.setAttribute(key,new URL(value,document.baseURI).href); });
+      }
+      } finally {
+        if (selected) source.classList.add('wpx-selected');
+        if (hovered) source.classList.add('wpx-hover');
+      }
+    });
+    function collect(rules) {
+      Array.from(rules || []).forEach(function (rule) {
+        if (rule.type === 5 && Array.from(fonts).some(function (f) { return f.replace(/["']/g,'').includes((rule.style.fontFamily || '').replace(/["']/g,'')); })) css.push(rule.cssText.replace(/url\(\s*(['"]?)([^)'"\s]+)\1\s*\)/g,function(all,q,url){return 'url("'+new URL(url,rule.parentStyleSheet.href||document.baseURI).href+'")';}));
+        else if (rule.type === 7 && animations.has(rule.name)) css.push(rule.cssText);
+        else if (rule.cssRules && rule.type !== 7) collect(rule.cssRules);
+      });
+    }
+    Array.from(document.styleSheets).forEach(function(sheet){try{collect(sheet.cssRules);}catch(e){}});
+    cleanThreeTree(clone);
+    clone.querySelectorAll('script:not([type="application/json"]),iframe,object,embed,link,style').forEach(function(n){n.remove();});
+    if (clone.matches('script,iframe,object,embed,link,style,canvas')) throw new Error('请选择包含内容的元素，不能直接收藏脚本或画布');
+    var cs = getComputedStyle(el), rect = rectInStage(el), w = el.offsetWidth || parseFloat(cs.width) || rect.w, h = el.offsetHeight || parseFloat(cs.height) || rect.h;
+    clone.style.position = 'absolute'; clone.style.left = '0px'; clone.style.top = '0px'; clone.style.right = 'auto'; clone.style.bottom = 'auto'; clone.style.margin = '0';
+    clone.style.width = w + 'px'; clone.style.height = h + 'px'; clone.style.animation = 'none'; clone.style.opacity = '1'; clone.style.visibility = 'visible';
+    // Keep visible rotation/scale, but normalize its bounding box to the new origin.
+    var matrix = new DOMMatrix(cs.transform === 'none' ? undefined : cs.transform);
+    matrix.e = 0; matrix.f = 0;
+    var scale = String(cs.scale || '').split(/\s+/), sx = parseFloat(scale[0]) || 1, sy = parseFloat(scale[1]) || sx;
+    var rotation = String(cs.rotate || '').split(/\s+/).pop(), angle = parseFloat(rotation) || 0;
+    if (/rad$/.test(rotation)) angle *= 180 / Math.PI;
+    else if (/turn$/.test(rotation)) angle *= 360;
+    matrix = new DOMMatrix().rotate(angle).scale(sx,sy).multiply(matrix);
+    var points = [[0,0],[w,0],[0,h],[w,h]].map(function(p){return new DOMPoint(p[0],p[1]).matrixTransform(matrix);});
+    var minX = Math.min.apply(null,points.map(function(p){return p.x;})), minY = Math.min.apply(null,points.map(function(p){return p.y;}));
+    clone.style.transformOrigin = '0 0'; clone.style.translate = 'none'; clone.style.rotate = 'none'; clone.style.scale = 'none';
+    clone.style.transform = 'matrix(' + [matrix.a,matrix.b,matrix.c,matrix.d,-minX,-minY].join(',') + ')';
+    w = Math.max.apply(null,points.map(function(p){return p.x;})) - minX;
+    h = Math.max.apply(null,points.map(function(p){return p.y;})) - minY;
+    return { html: clone.outerHTML, css: css.join('\n'), w: w, h: h, type: el.querySelector('[data-wds-three]') || el.matches('[data-wds-three]') ? 'three' : el.dataset.wpxType || 'html', description: (el.textContent || el.getAttribute('alt') || '').trim().slice(0,500) };
   }
 
   function setElementHtml(elementId, html) {
     var el = elementById(elementId);
     if (!el) throw new Error('元素不存在');
-    var before = el.innerHTML;
+    var before = sourceHtml(el,true);
     el.innerHTML = String(html || '');
     var op = makeOp({ type: 'html', label: '修改元素内容', elementId: elementId, slideIndex: slideIndexOf(el), before: { html: before }, after: { html: el.innerHTML } });
     emitChange(op);
@@ -1266,10 +1495,14 @@
 
   function setTimeline(params) {
     var data = params && params.timeline ? params.timeline : null;
+    var before = getTimeline().timeline;
+    var changed = JSON.stringify(before) !== JSON.stringify(data);
+    var op = changed && !(params && params.silent) ? makeOp({ type: 'timeline', label: '修改动画时间线', before: { timeline: before }, after: { timeline: data } }) : null;
     if (RAW_MODE) {
       var pl = rawTimelinePlayer();
       if (pl) pl.setTimeline(data);
-      return { ok: true, timeline: data, raw: true };
+      if (op) emitChange(op);
+      return { ok: true, timeline: data, raw: true, op: op };
     }
     var node = document.getElementById('wpx-timeline');
     if (!node) {
@@ -1280,7 +1513,8 @@
     }
     node.textContent = JSON.stringify(data || { version: 1, duration: 8000, tracks: [] });
     if (runtime && runtime.setTimeline) runtime.setTimeline(data);
-    return { ok: true, timeline: data };
+    if (op) emitChange(op);
+    return { ok: true, timeline: data, op: op };
   }
 
   function timelineCall(method, params) {
@@ -1469,6 +1703,7 @@
     var src = slides[index];
     if (!src) throw new Error('幻灯片不存在');
     var clone = src.cloneNode(true);
+    cleanThreeTree(clone);
     clone.dataset.id = 's' + Math.random().toString(36).slice(2, 6);
     clone.dataset.name = (src.dataset.name || '幻灯片') + ' 副本';
     $$('[data-wpx-el]', clone).forEach(function (n) { n.dataset.wpxEl = genId('e'); });
@@ -1564,7 +1799,7 @@
     var index = params && params.index != null ? params.index : currentIndex;
     var slide = slides[index];
     if (!slide) throw new Error('幻灯片不存在');
-    return { html: slide.outerHTML, css: collectStyles() };
+    return { html: sourceHtml(slide), css: collectStyles() };
   }
 
   function setSlideHtml(params) {
@@ -1685,14 +1920,27 @@
   /* ======================================================================
      序列化
      ====================================================================== */
+  function cleanThreeTree(root) {
+    root.querySelectorAll('[data-wds-three-generated]').forEach(function(n){n.remove();});
+    var hosts=Array.from(root.querySelectorAll('[data-wds-three]'));
+    if(root.matches&&root.matches('[data-wds-three]'))hosts.unshift(root);
+    hosts.forEach(function(n){['data-wds-three-ready','data-wds-three-interacting','data-wds-three-error'].forEach(function(key){n.removeAttribute(key);});});
+    var scaled=Array.from(root.querySelectorAll('[data-wds-three-raw-scale]'));
+    if(root.matches&&root.matches('[data-wds-three-raw-scale]'))scaled.unshift(root);
+    scaled.forEach(function(n){n.style.removeProperty('zoom');});
+    return root;
+  }
+  function sourceHtml(node,inner) { var clone=cleanThreeTree(node.cloneNode(true));return inner?clone.innerHTML:clone.outerHTML; }
   function serialize() {
     if (RAW_MODE) return { html: rawSerialize() };
     if (textEdit) endTextEdit();
     syncModel();
+    if (runtime && runtime.restorePresentationOverrides) runtime.restorePresentationOverrides();
     var clone = document.documentElement.cloneNode(true);
+    cleanThreeTree(clone);
     var bridge = clone.querySelector('#wpx-bridge');
     if (bridge) bridge.remove();
-    clone.querySelectorAll('#wpx-edit-style').forEach(function (n) { n.remove(); });
+    clone.querySelectorAll('#wpx-edit-style,[data-wpx-timeline-layer],[data-wpx-timeline-legacy]').forEach(function (n) { n.remove(); });
     clone.querySelectorAll('[contenteditable]').forEach(function (n) {
       n.removeAttribute('contenteditable');
       n.removeAttribute('spellcheck');
@@ -1718,7 +1966,29 @@
       if (!body.dataset.wpxVignette) body.dataset.wpxVignette = 'off';
       if (!body.dataset.wpxClickAdvance) body.dataset.wpxClickAdvance = 'off';
     }
+    if (runtime && runtime.ensureVisible) runtime.ensureVisible();
     return { html: '<!doctype html>\n' + clone.outerHTML };
+  }
+
+  function getVisualState(params) {
+    var slide=RAW_MODE?rawSlideEls[currentIndex]:slides[currentIndex];
+    var root=stageEl||document.body,r=root.getBoundingClientRect();
+    var nodes=slide?Array.from(slide.querySelectorAll('[data-wpx-el]')):[];
+    var elements=nodes.slice(0,300).map(function(el){
+      var rect=rectInStage(el),cs=getComputedStyle(el);
+      return {elementId:el.dataset.wpxEl,tag:el.tagName.toLowerCase(),text:(el.textContent||'').trim().slice(0,500),rect:rect,
+        fontSize:cs.fontSize,fontFamily:cs.fontFamily,lineHeight:cs.lineHeight,color:cs.color,display:cs.display,
+        overflowX:el.scrollWidth>el.clientWidth+2,overflowY:el.scrollHeight>el.clientHeight+2,
+        outsideCanvas:rect.x<-.5||rect.y<-.5||rect.x+rect.w>1920.5||rect.y+rect.h>1080.5};
+    });
+    var focus=null;
+    if(params&&params.elementId){
+      var el=elementById(params.elementId);
+      if(!el||slideIndexOf(el)!==currentIndex)throw new Error('截图元素不在指定页面');
+      var f=rectInStage(el),x=Math.max(0,f.x-16),y=Math.max(0,f.y-16);
+      focus={x:x,y:y,w:Math.min(1920-x,f.w+32),h:Math.min(1080-y,f.h+32)};
+    }
+    return {index:currentIndex,coordinateSpace:{width:1920,height:1080},viewport:{x:r.left,y:r.top,width:r.width,height:r.height},focus:focus,elements:elements,totalElements:nodes.length};
   }
 
   function getThumb(params) {
@@ -1728,6 +1998,7 @@
       var rawEl = rawSlideEls[index];
       if (!rawEl) return { html: '', css: collectStyles(), w: 1920, h: 1080, raw: true };
       var rawClone = rawEl.cloneNode(true);
+      snapshotThreeTree(rawClone,rawEl);
       rawClone.classList.add('live');
       rawClone.classList.add('active');
       return { html: rawClone.outerHTML, css: collectStyles(), w: 1920, h: 1080, raw: true };
@@ -1735,16 +2006,27 @@
     var slide = slides[index];
     if (!slide) return { html: '', css: collectStyles(), w: 1920, h: 1080 };
     var clone = slide.cloneNode(true);
+    snapshotThreeTree(clone,slide);
     clone.classList.add('is-active');
     var canvas = canvasOf(clone);
     if (canvas) canvas.classList.add('live');
     return { html: clone.outerHTML, css: collectStyles(), w: 1920, h: 1080 };
+  }
+  function snapshotThreeTree(clone,source) {
+    var hosts=source.querySelectorAll('[data-wds-three]');
+    clone.querySelectorAll('[data-wds-three]').forEach(function(host,i){
+      try {
+        var url=window.__WDS_THREE__.capture(hosts[i]);
+        host.replaceChildren();var image=document.createElement('img');image.src=url;image.alt=hosts[i].getAttribute('aria-label')||'3D';image.style.cssText='display:block;width:100%;height:100%;object-fit:contain';host.appendChild(image);
+      }catch(e){cleanThreeTree(host);}
+    });
   }
 
   /** 兼容模式序列化：保留原稿全部 script/style，只清理编辑桥/编辑态痕迹 */
   function rawSerialize() {
     if (textEdit) endTextEdit();
     var clone = document.documentElement.cloneNode(true);
+    cleanThreeTree(clone);
     clone.querySelectorAll('#wpx-bridge').forEach(function (n) { n.remove(); });
     clone.querySelectorAll('#wpx-edit-style').forEach(function (n) { n.remove(); });
     clone.querySelectorAll('[contenteditable]').forEach(function (n) {
@@ -1801,14 +2083,20 @@
     var el = op.elementId ? elementById(op.elementId) : null;
     try {
       switch (op.type) {
+        case 'timeline':
+          setTimeline({ timeline: target && target.timeline, silent: true });
+          emit('timelinechange', { timeline: target && target.timeline });
+          break;
         case 'style':
           if (!el) throw new Error('元素已不存在');
           if (target && target.cssText != null) { if (target.cssText) el.setAttribute('style', target.cssText); else el.removeAttribute('style'); }
+          if (target && target.html != null) el.innerHTML = target.html;
           break;
         case 'text':
         case 'html':
           if (!el) throw new Error('元素已不存在');
           if (target && target.html != null) el.innerHTML = target.html;
+          if (target && target.cssText != null) el.style.cssText = target.cssText;
           break;
         case 'attr':
           if (!el) throw new Error('元素已不存在');
@@ -1829,11 +2117,11 @@
           break;
         case 'insert':
           if (direction === 'undo') removeElementById(op.elementId);
-          else if (other && other.html) insertHtmlAt(op.slideIndex, other.index, other.html);
+          else if (target && target.html) insertHtmlAt(op.slideIndex, target.index, target.html);
           break;
         case 'delete':
           if (direction === 'undo') {
-            if (other && other.html) insertHtmlAt(op.slideIndex, other.index, other.html);
+            if (target && target.html) insertHtmlAt(op.slideIndex, target.index, target.html);
           } else removeElementById(op.elementId);
           break;
         case 'slide-add':
@@ -1928,6 +2216,12 @@
       }
       syncModel();
       ensureElementIds();
+      if (textEdit && !textEdit.el.isConnected) { textEdit.beforeHtml=textEdit.el.innerHTML;endTextEdit(); }
+      if (textEdit) {
+        textEdit.beforeHtml = textEdit.el.innerHTML;
+        var caret=document.createRange();caret.selectNodeContents(textEdit.el);caret.collapse(false);textEdit.range=caret.cloneRange();
+        textEdit.el.focus({preventScroll:true});var selection=window.getSelection();selection.removeAllRanges();selection.addRange(caret);
+      }
       var sel = selectedId ? elementById(selectedId) : null;
       emit('selectionchange', { selection: sel ? selectionInfo(sel) : null });
       emit('deckchange', { state: getState() });
@@ -1960,11 +2254,25 @@
   /* ======================================================================
      事件绑定
      ====================================================================== */
+  function isThreeUi(el) {
+    return Boolean(el&&el.closest&&el.closest('[data-wds-three-ui],[data-wds-three][data-wds-three-interacting="true"]'));
+  }
+  function clickThreeUiAt(x,y) {
+    var button=Array.from(document.querySelectorAll('[data-wds-three-ui] button,button[data-wds-three-ui]')).find(function(node){var r=node.getBoundingClientRect();return r.width&&r.height&&x>=r.left&&x<=r.right&&y>=r.top&&y<=r.bottom;});
+    if(!button)return false;button.click();return true;
+  }
   function isUiTarget(el) {
-    return Boolean(el && el.closest && (el.closest('.wpx-hud')));
+    return Boolean(el && el.closest && (el.closest('.wpx-hud')||isThreeUi(el)));
   }
 
   function bindEvents() {
+    document.addEventListener('wds-three-ready',function(){emit('threeready',{index:currentIndex});});
+    document.addEventListener('wds-three-interaction',function(e){
+      var active=!!e.detail?.active;
+      if(RAW_MODE)setRawHitLayer(!active);
+      if(active){dragState=null;clearHover();}
+      emit('threeinteraction',{active:active,elementId:e.detail?.elementId||null});
+    });
     /* 右键：拦截网页默认菜单，把坐标与命中元素交给父窗口自定义菜单 */
     document.addEventListener('contextmenu', function (e) {
       if (isUiTarget(e.target)) return;
@@ -2042,10 +2350,17 @@
       setSelected(st.el);
     }, true);
 
+    document.addEventListener('selectionchange', function () {
+      if (!textEdit) return;
+      var sel = window.getSelection();
+      if (sel && sel.rangeCount && textEdit.el.contains(sel.getRangeAt(0).commonAncestorContainer)) textEdit.range = sel.getRangeAt(0).cloneRange();
+    });
+
     document.addEventListener('dblclick', function (e) {
       if (isUiTarget(e.target)) return;
+      if (RAW_MODE && e.target === rawHitLayer) return;
       var top = topLevelOf(e.target);
-      if (!top) return;
+      if (!top) { blankDoubleClick(e); return; }
       if (!hasText(top)) return;
       setSelected(top);
       try { beginTextEdit(top.dataset.wpxEl); } catch (err) { /* ignore */ }
@@ -2059,8 +2374,8 @@
         post({ type: 'wpx:event', event: 'shortcut', data: { key: e.key, code: e.code, ctrlKey: e.ctrlKey, shiftKey: e.shiftKey, altKey: e.altKey, metaKey: e.metaKey } });
       }
       if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); forward(); return; }
-      if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); forward(); return; }
-      if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); forward(); return; }
+      if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); commitTypedText(); forward(); return; }
+      if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); commitTypedText(); forward(); return; }
       if (mod && e.key.toLowerCase() === 'd') { if (!isInput) { e.preventDefault(); forward(); } return; }
       if (e.key === 'Escape') { if (textEdit) { e.preventDefault(); endTextEdit(); } forward(); return; }
       if (isInput) return;
@@ -2086,7 +2401,9 @@
      RPC 分发
      ====================================================================== */
   var METHODS = {
+    ensureThree: function () { return ensureThreeRuntime().then(function(rt){return rt?rt.getState():{count:0,instances:[]};}); },
     getState: function () { return getState(); },
+    getVisualState: function (p) { return getVisualState(p); },
     go: function (p) {
       if (RAW_MODE) return rawGo(p.index);
       return runtime.go(p.index, p.opts).then(function (i) { return { index: i }; });
@@ -2096,12 +2413,15 @@
     deselect: function () { setSelected(null); return null; },
     getSelection: function () { return selectionInfo(elementById(selectedId)); },
     hitTest: function (p) { return hitTest(p.x, p.y); },
-    beginTextEdit: function (p) { return beginTextEdit(p.elementId); },
+    beginTextEdit: function (p) { return beginTextEdit(p.elementId, p.selectAll); },
+    commitTextEdit: function () { return {op:commitTypedText()}; },
+    setAbsoluteSize: function (p) { return absoluteSize(p); },
     endTextEdit: function () { return endTextEdit(); },
     execTextCommand: function (p) { return execTextCommand(p.command, p.value); },
     setText: function (p) { return setText(p.elementId, p.html != null ? p.html : p.text); },
     setElementHtml: function (p) { return setElementHtml(p.elementId, p.html); },
     getElementHtml: function (p) { return getElementHtml(p.elementId); },
+    captureFavorite: function (p) { return captureFavorite(p.elementId); },
     setStyles: function (p) { return setStyles(p.elementId, p.styles); },
     setAttrs: function (p) { return setAttrs(p.elementId, p.attrs); },
     moveElement: function (p) { return moveElement(p.elementId, p.dx, p.dy); },
@@ -2211,6 +2531,7 @@
       rawLoadedPatches = patches || [];
       ensureElementIds();
       bindEvents();
+      refreshThree();
       window.__WPX_BRIDGE_READY__ = true;
       emit('ready', { mode: 'raw', state: getState() });
     });
@@ -2236,6 +2557,7 @@
       }
       bindEvents();
       syncModel();
+      refreshThree();
       window.__WPX_BRIDGE_READY__ = true;
       emit('ready', { mode: 'edit', state: getState() });
     });

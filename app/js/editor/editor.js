@@ -338,6 +338,10 @@ function bindBridgeEvents() {
   offBridge.push(bridge.on('change', (data) => onBridgeChange(data)));
   offBridge.push(bridge.on('selectionchange', (data) => onSelectionChange(data)));
   offBridge.push(bridge.on('slidechange', (data) => onSlideChange(data)));
+  offBridge.push(bridge.on('blankdblclick', (pt) => bus.runCommand('insert.text', { at: pt })));
+  offBridge.push(bridge.on('threeinteraction',(data)=>bus.emit('editor:three-interaction',data)));
+  offBridge.push(bridge.on('threeready',(data)=>bus.emit('editor:three-ready',data)));
+  offBridge.push(bridge.on('timelinechange', () => bus.emit('timeline:changed')));
   offBridge.push(bridge.on('textedit', (data) => {
     bus.emit('editor:text-editing', { editing: !!data?.editing, elementId: data?.elementId || null });
   }));
@@ -543,6 +547,7 @@ async function putRawPatches(projectId, patches) {
 }
 
 async function saveNow(options = {}) {
+  if(ctx?.workspaceRestoring)return {ok:false,error:'正在恢复云端工作区'};
   if (versionBusy) return { ok: false, error: '正在处理工程版本，请稍候' };
   if (!project || !bridge?.ready) {
     if (options.toast) toast('画布尚未就绪，无法保存');
@@ -570,10 +575,10 @@ async function saveNow(options = {}) {
       // 合并打开时已应用的补丁，避免第二次保存覆盖掉之前的编辑；同目标去重
       const patches = dedupeRawPatches((rawBasePatches || []).concat(sessionPatches));
       const res = await putRawPatches(projectId, patches);
-      rawBasePatches = patches.slice();
-      // 补丁已落盘：清空会话历史，下一次保存只追加新操作（历史不再作为跨会话真相源）
-      store.setHistory([], 0);
-      historyDirty = false;
+      const tl=await bridge.call('getTimeline');
+      const tlRes=await fetch('/api/projects/'+encodeURIComponent(projectId)+'/timeline',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({timeline:tl?.timeline})});
+      if(!tlRes.ok)throw new Error('时间线保存失败');
+      // Keep this session's history so automatic saves do not erase Undo.
       lastSavedAt = Number(res?.savedAt) || Date.now();
       dirty = false;
       setSaving('saved', lastSavedAt);
@@ -609,6 +614,7 @@ async function saveNow(options = {}) {
 }
 
 function persistHistory() {
+  if(ctx?.workspaceRestoring)return Promise.resolve();
   if (versionBusy) return historySaves;
   historySaves = historySaves.catch(() => {}).then(() => writeHistory());
   return historySaves;
@@ -629,6 +635,7 @@ async function writeHistory() {
 }
 
 async function flushHistory() {
+  if(ctx?.workspaceRestoring)return;
   if (!historyDirty) return;
   historyDebounced?.cancel();
   await persistHistory();
@@ -640,6 +647,7 @@ function scheduleHistorySave() {
 }
 
 function flushHistoryKeepalive() {
+  if(ctx?.workspaceRestoring)return;
   if (versionBusy) return;
   if (!project) return;
   const history = store.get().history;
@@ -658,6 +666,7 @@ function flushHistoryKeepalive() {
 
 async function doUndoRedo(isRedo) {
   if (!bridge?.ready) { toast('画布尚未就绪'); return { ok: false }; }
+  await bridge.call('commitTextEdit');
   const op = isRedo ? store.redoOp() : store.undoOp();
   if (!op) {
     toast(isRedo ? '没有可重做的操作' : '没有可撤销的操作');

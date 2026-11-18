@@ -35,8 +35,25 @@ body:not(.wpx-editing) .is-active .wds-nav-node{animation:wds-nav-unfold .85s cu
 `;
 
 export function buildNavigationHTML(options = {}, seed = 'nav') {
-  const style = NAVIGATION_STYLES.some((s) => s.id === options.style) ? options.style : 'petals';
+  const style=options.style||(options.html?'custom':'steps');
   const chapters = options.chapters || [];
+  if(style==='custom') {
+    if(chapters.length<2||chapters.length>24)throw new Error('自定义目录需要 2–24 个章节');
+    let html=String(options.html||'').trim();const customCss=String(options.css||'');
+    if(!html)throw new Error('自定义目录需要 HTML / SVG 内容，不能退回固定样式');
+    if(/<\/?(?:script|iframe|object|embed)\b|\son\w+\s*=|javascript\s*:/i.test(html)||/<\/style/i.test(customCss))throw new Error('目录仅接受 HTML / SVG 和 CSS，脚本请使用工程 JS 工具');
+    if(html.length+customCss.length>200000)throw new Error('目录代码超过 200000 字符');
+    for(let i=0;i<chapters.length;i++) {
+      const token=`{{target:${i}}}`;
+      if(!chapters[i].targetId||!html.includes(token))throw new Error(`目录缺少章节 ${i+1} 的有效链接：${token}`);
+      const linked=new RegExp(`data-wds-target=["']\\{\\{target:${i}\\}\\}["']`,'i').test(html)&&new RegExp(`data-wpx-action=["']go-id:\\{\\{target:${i}\\}\\}["']`,'i').test(html);
+      if(!linked)throw new Error(`章节 ${i+1} 需使用 data-wds-target="${token}" 和 data-wpx-action="go-id:${token}"`);
+      html=html.split(token).join(esc(chapters[i].targetId));
+    }
+    if(/\{\{target:/.test(html))throw new Error('目录引用了不存在的章节');
+    return `<style data-wds-navigation-style>.wds-nav-custom{position:absolute;inset:0;width:1920px;height:1080px;color:var(--wpx-fg);font-family:var(--wpx-sans)}${customCss}</style><div class="wds-nav-custom" data-wds-navigation="custom" data-wds-nav-transition="page">${html}</div>`;
+  }
+  if(!NAVIGATION_STYLES.some(s=>s.id===style))throw new Error('未知目录形式；原创布局请使用 custom 并提供 HTML / CSS');
   if (chapters.length < 2 || chapters.length > 6) throw new Error('目录需要 2–6 个章节；更多内容请分层组织');
   const colors = ['#bed6a7', '#e2c9a4', '#b2ccc9', '#d9b6a7', '#c5bed9', '#b6c9e0'];
   const nodes = chapters.map((chapter, i) => {

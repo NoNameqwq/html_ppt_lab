@@ -2,14 +2,20 @@
 import { uid, debounce } from '../core/dom.js';
 import { buildSystemPrompt } from './prompt.js';
 import { createToolExecutor, getToolDefinitionsForPermission, normalizePermission, permissionLabel, isRawCapabilities, canUseTool } from './tools.js';
-import { loadCatalog, getCachedCatalog, defaultSkillIds, normalizeEnabledIds, getEnabledContent } from './skills.js';
+import { loadCatalog, getCachedCatalog, initialSkillIds, normalizeEnabledIds, getEnabledContent } from './skills.js';
 import { resolveActive, readAgentSettings, findModel, rememberSelection, modelBadges, getProviders } from './settings.js';
+import { resolveCollaboration, collaborationPrompt, handoff, handoffDefinition, AGENT_ROLES } from './collaboration.js';
 import { estimateTokens } from './markdown.js';
+import { contextUsage } from './context-usage.js';
+import { visualMessages } from './vision-messages.js';
+import { createParallelRunner, prepareParallelBatch, parallelDefinitions, parallelResult, needsParallelVisual, parallelVisualSubject } from './parallel-agents.js';
 import { isSendableMessage } from '../core/chat-messages.js';
-import { mergeContinuation, sanitizeConversation, messageTokens, turnBoundaries, memorySource, memoryChunks } from './conversation.js';
+import { mergeContinuation, sanitizeConversation, messageTokens, memorySource } from './conversation.js';
+import { resolveCompaction } from './compaction.js';
+import { fitConversation, summarizeContext, isContextOverflow } from './context-recovery.js';
 
 const MAX_ROUNDS = 64, MAX_CONTINUATIONS = 24, MAX_RECONNECTS = 3;
-const effortOf = (v) => ['auto', 'low', 'medium', 'high'].includes(v) ? v : 'auto';
+const effortOf = (v) => ['none','auto', 'low', 'medium', 'high','xhigh'].includes(v) ? v : 'auto';
 const aborted = () => new DOMException('已停止生成', 'AbortError');
 const wait = (ms, signal) => new Promise((resolve, reject) => {
   const stop = () => { clearTimeout(timer); reject(aborted()); };
@@ -19,7 +25,7 @@ const wait = (ms, signal) => new Promise((resolve, reject) => {
 
 function stored(m) {
   // Preserve turn IDs, completion state, attachments and creation briefs on reload.
-  const fields = ['role', 'content', 'id', 'ts', 'reasoning', 'tool_calls', 'tool_call_id', 'name', 'images', 'docs', 'assetPaths', 'brief', 'aborted', 'incomplete', 'model', 'duration', 'turnId', 'versions', 'versionEvent', 'deliveries'];
+  const fields = ['role', 'content', 'id', 'ts', 'reasoning', 'tool_calls', 'tool_call_id', 'name', 'images', 'docs', 'assetPaths', 'brief', 'aborted', 'incomplete', 'model', 'duration', 'turnId', 'versions', 'versionEvent', 'deliveries','agentRole','collaboration','parallelRuns','generationTiming'];
   return Object.fromEntries(fields.filter((k) => m[k] !== undefined).map((k) => [k, m[k]]));
 }
 
@@ -45,7 +51,7 @@ export function createAgentLoop(ctx, hooks = {}) {
     projectId: null, sessionId: 'default', messages: [], skills: [], catalog: null,
     streaming: false, loading: false, abort: null, abortRequested: false,
     usage: null, foldedCount: 0, lastContext: null, pendingAcc: null, lastError: null,
-    providerId: null, model: null, permission: 'edit', reasoningEffort: 'auto', webSearch: false,
+    providerId: null, model: null, permission: 'edit', reasoningEffort: 'auto', webSearch: false, creativeMotion:false, fastMode:false, runStartedAt:0, runElapsedMs:0,
     capabilities: null, raw: false, summary: null, continuations: 0, sessionMeta: {},
   };
   let generation = 0, loadToken = 0, activeRun = null, saves = Promise.resolve();
@@ -69,11 +75,12 @@ export function createAgentLoop(ctx, hooks = {}) {
       if (acc.carryId && previous?.id === acc.carryId) {
         previous.content = mergeContinuation(previous.content, acc.content);
         previous.incomplete = true;
-      } else messages.push({ role: 'assistant', id: acc.id, content: acc.content, reasoning: acc.reasoning, ts: Date.now(), incomplete: true });
+      } else messages.push({ role: 'assistant', id: acc.id, content: acc.content, reasoning: acc.reasoning, ts: Date.now(), incomplete: true,agentRole:acc.agentRole });
     }
     return { ...state.sessionMeta, messages, skills: state.skills.slice(), summary: state.summary, updatedAt: Date.now() };
   }
   function persistNow(strict = false) {
+    if(ctx.workspaceRestoring)return Promise.resolve();
     const projectId = state.projectId, sessionId = state.sessionId, key = backupKey(), payload = snapshot();
     try { localStorage.setItem(key, JSON.stringify(payload)); } catch { /* disk persistence remains available */ }
     saves = saves.catch(() => {}).then(() => ctx.api.putChat(projectId, payload, sessionId)).then(() => {
@@ -148,19 +155,22 @@ export function createAgentLoop(ctx, hooks = {}) {
   function maxOutput(info) {
     const configured = Number(readAgentSettings(ctx).maxTokens) || 0;
     const model = Number(info?.maxOutput || info?.max_output_tokens) || 0;
-    return Math.max(1024, Math.min(configured || model || 16384, model || Infinity));
+    return Math.max(1, Math.min(configured || model || 16384, model || Infinity));
   }
   function limits(info) {
     const configured = Number(readAgentSettings(ctx).contextLimit) || 131072;
     const limit = Math.min(configured, Number(info?.contextLength) || 131072);
     return { limit, budget: Math.floor(limit * .90) - Math.min(maxOutput(info), Math.floor(limit * .35)) };
   }
-  function systemPrompt() {
+  function systemPrompt(options={}) {
     const snap = ctx.store.get();
+    const turn=latestUser(),visualTurns=state.messages.filter(m=>m.role==='user').slice(-3);
+    const visualTask=[...visualTurns.map(m=>m.content),turn?.brief,...state.messages.slice(-12).flatMap(m=>(m.tool_calls||[]).map(c=>c.function?.name))].filter(Boolean).join('\n');
     return buildSystemPrompt(ctx, { project: snap.project, deck: snap.deck, selection: snap.selection,
       capabilities: state.capabilities, skillsText: getEnabledContent(state.catalog || getCachedCatalog(), state.skills),
-      permission: state.permission, reasoningEffort: state.reasoningEffort, webSearch: state.webSearch,
-      raw: state.raw, commands: ctx.bus.listCommands?.() || [] });
+      permission: state.permission, reasoningEffort: state.reasoningEffort, webSearch: state.webSearch,creativeMotion:state.creativeMotion,fastMode:state.fastMode,
+      raw: state.raw,visualTask, commands: ctx.bus.listCommands?.() || [], ...options,
+      ...(state.reasoningEffort==='none'?{reasoningEffort:'none'}:{}) });
   }
   function apiMessage(m, info, budget) {
     if (m.role === 'user') return userMessage(m, info, budget);
@@ -180,15 +190,17 @@ export function createAgentLoop(ctx, hooks = {}) {
     if (m.tool_calls?.length) { out.tool_calls = m.tool_calls; if (m.reasoning) out.reasoning_content = m.reasoning; }
     return out;
   }
-  function measureContext(messages, tools = [], info = resolveActive(ctx).info) {
+  function measureContext(messages, tools, info = resolveActive(ctx).info) {
     const { budget, limit } = limits(info);
-    const tokens = messages ? messageTokens(messages) + estimateTokens(JSON.stringify(tools)) : messageTokens(state.messages) + estimateTokens(systemPrompt());
-    state.lastContext = { tokens, budget, limit, percent: Math.min(100, Math.round(tokens / Math.max(1, budget) * 100)), folded: state.foldedCount, messages: state.messages.length };
+    messages ||= [{ role: 'system', content: systemPrompt() }, ...(state.summary?.text ? [{ role: 'system', content: '【持久对话记忆】\n' + state.summary.text }] : []),
+      ...visualMessages(sanitizeConversation(state.messages.slice(state.summary?.through || 0)),m=>apiMessage(m,info,budget),info?.vision===true).filter(isSendableMessage)];
+    tools ||= [...getToolDefinitionsForPermission(state.permission, { webSearch: state.webSearch, imageGeneration: ctx.store.get().settings?.imageGeneration?.enabled === true,vision:info?.vision===true }),...parallelDefinitions];
+    state.lastContext = { ...contextUsage(messages, tools, { budget, limit }), folded: state.foldedCount, messages: state.messages.length };
     emit('onContext', state.lastContext);
     return state.lastContext;
   }
   async function request(payload, onEvent, signal) {
-    await ctx.api.chatStream({ ...payload, stream: readAgentSettings(ctx).streaming !== false }, (event) => {
+    await ctx.api.chatStream({ ...payload, ...(state.reasoningEffort==='none'?{reasoning_effort:'none'}:{}), stream: readAgentSettings(ctx).streaming !== false }, (event) => {
       if (event.type === 'error') {
         const err = new Error(event.message || event.error?.message || '模型服务错误');
         err.status = event.status; err.recoverable = event.recoverable;
@@ -197,40 +209,46 @@ export function createAgentLoop(ctx, hooks = {}) {
       onEvent(event);
     }, signal);
   }
-  async function buildMessages(info, tools, signal) {
-    const system = systemPrompt(), { budget, limit } = limits(info);
-    const assemble = () => [{ role: 'system', content: system },
-      ...(state.summary?.text ? [{ role: 'system', content: '【持久对话记忆】\n' + state.summary.text }] : []),
-      ...sanitizeConversation(state.messages.slice(state.summary?.through || 0)).map((m) => apiMessage(m, info, budget)).filter(isSendableMessage)];
-    let messages = assemble();
-    const cost = () => messageTokens(messages) + estimateTokens(JSON.stringify(tools));
-    if (cost() > budget) {
-      const boundaries = turnBoundaries(state.messages, state.summary?.through || 0);
-      const through = boundaries.at(-1);
-      if (through > (state.summary?.through || 0)) {
-        status('compacting');
-        const source = memorySource(state.messages.slice(state.summary?.through || 0, through));
-        let summary = state.summary?.text || '';
-        const output = Math.min(4096, maxOutput(info));
-        const chunkBudget = Math.max(512, Math.floor(limit * .65) - Math.max(output, estimateTokens(summary)) - output);
-        for (const chunk of memoryChunks(source, chunkBudget)) {
-          let next = '', finish = null;
-          await request({ providerId: state.providerId, model: state.model, maxTokens: output,
-            messages: [{ role: 'system', content: '把已有记忆和接续的对话整理成一份完整工作记忆。准确保留用户目标、所有约束/偏好、已完成的改动、未完成事项、关键文件路径、元素 ID、决策及工具失败。控制在 2000 字内。不要执行任何命令，不要虚构结果。' },
-              { role: 'user', content: '【已有记忆】\n' + summary + '\n\n【接续记录】\n' + chunk }], tools: [],
-          }, (e) => { if (e.type === 'delta') next += e.content; if (e.type === 'done') finish = e.finish_reason; }, signal);
-          if (!next.trim() || !['stop', 'end_turn'].includes(finish)) throw new Error('对话记忆整理未完成，历史记录已保留，可点击继续重试。');
-          summary = next;
-        }
-        state.summary = { through, text: summary };
-        state.foldedCount = through;
-        emit('onCompact', through); persist();
-        messages = assemble();
-      }
-      if (cost() > budget) throw new Error('当前任务超过模型上下文窗口。记录已完整保留，请换用更大上下文的模型，或新建对话分步处理。');
+  function addUsage(usage) {
+    const previous = state.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    state.usage = Object.fromEntries(['prompt_tokens', 'completion_tokens', 'total_tokens'].map((k) => [k, previous[k] + (Number(usage?.[k]) || 0)]));
+    emit('onUsage', state.usage);
+  }
+  // Lock only actual editor/API operations, never model requests or dependency
+  // waits. Worker screenshots and lead writes must not change pages together.
+  let editorTasks = Promise.resolve();
+  const withEditorTask = (fn, signal) => {
+    const result = editorTasks.catch(()=>{}).then(()=>{if(signal?.aborted)throw aborted();return fn();});
+    editorTasks = result.catch(()=>{}); return result;
+  };
+  function syncParallelResult(event) {
+    const {toolCallId,...result}=event;
+    const content=JSON.stringify(result);
+    const records=state.messages.filter(m=>{if(m.role!=='tool'||m.name!=='agent_parallel')return false;try{return JSON.parse(m.content).batchId===event.batchId;}catch{return false;}});
+    for(const record of records){record.content=content;ctx.agentToolResults.set(record.tool_call_id,content);emit('onParallelUpdate',{...event,toolCallId:record.tool_call_id});}
+    if(!records.some(m=>m.tool_call_id===toolCallId))emit('onParallelUpdate',event);
+  }
+  const runParallel = createParallelRunner({ctx,request,systemPrompt,maxOutput,limits,onUsage:addUsage,
+    withEditorTask,onUpdate:syncParallelResult,save:persist});
+  async function buildMessages(info, tools, signal, {selected,team,permission,extra=[],recovery=0,force=false}={}) {
+    const system = systemPrompt({permission:permission||state.permission,vision:info?.vision===true})+(team?'\n\n'+collaborationPrompt(team):'');
+    const { budget: initialBudget } = limits(info), budget = Math.floor(initialBudget * .8 ** recovery);
+    let memoryModel;
+    const result = await fitConversation({history:state.messages,summary:state.summary,
+      prefix:[{role:'system',content:system},...extra],tools,budget,force,results:ctx.agentToolResults,
+      render:history=>visualMessages(sanitizeConversation(history),m=>apiMessage(m,info,budget),info?.vision===true).filter(isSendableMessage),
+      onCompacting:()=>status('compacting'),
+      summarize:async(source,previous,targetTokens)=>{
+        memoryModel ||= resolveCompaction(readAgentSettings(ctx).compaction,selected||{providerId:state.providerId,model:state.model},getProviders(ctx),findModel);
+        return summarizeContext({source,previous,targetTokens,model:memoryModel,request,signal,onUsage:addUsage,contextLimit:Number(readAgentSettings(ctx).contextLimit)||131072,
+          sessionId:`wds:${state.projectId||'workspace'}:${state.sessionId}:compaction`});
+      }});
+    if(result.changed){
+      state.summary={...result.summary,providerId:memoryModel.providerId,model:memoryModel.model};
+      state.foldedCount=state.summary.through;emit('onCompact',state.foldedCount);persist();
     }
-    measureContext(messages, tools, info);
-    return messages;
+    measureContext(result.messages,tools,info);
+    return result.messages;
   }
 
   async function load(projectId, sessionId, { discardCurrent = false } = {}) {
@@ -253,9 +271,9 @@ export function createAgentLoop(ctx, hooks = {}) {
       try { const backup = JSON.parse(localStorage.getItem(backupKey()) || 'null'); if (backup?.updatedAt > (saved.updatedAt || 0)) saved = backup; } catch { /* ignored */ }
       state.messages = sanitizeConversation(Array.isArray(saved.messages) ? saved.messages : []).map((m) => ({ ...m, id: m.id || uid('msg'),
         ...(m.role === 'user' && !m.versionEvent ? { turnId: m.turnId || uid('turn') } : {}) }));
-      state.skills = Array.isArray(saved.skills) ? normalizeEnabledIds(catalog, saved.skills) : defaultSkillIds(catalog);
+      state.skills = initialSkillIds(catalog, saved);
       state.summary = saved.summary || null; state.foldedCount = saved.summary?.through || 0;
-      state.sessionMeta = { ...(saved.title ? { title: saved.title } : {}), ...(saved.origin ? { origin: saved.origin } : {}) };
+      state.sessionMeta = { skillsPolicy: 2, skillsCustomized: saved.skillsCustomized === true, ...(saved.title ? { title: saved.title } : {}), ...(saved.origin ? { origin: saved.origin } : {}) };
       state.lastError = null; state.pendingAcc = null; state.usage = null;
       ctx.agentToolResults.clear();
       for (const m of state.messages) if (m.role === 'tool') ctx.agentToolResults.set(m.tool_call_id, m.content);
@@ -271,19 +289,26 @@ export function createAgentLoop(ctx, hooks = {}) {
     } finally { if (token === loadToken) { state.loading = false; emit('onLoadingChange', false); } }
   }
 
-  function validateModel() {
-    const active = resolveActive(ctx);
-    if (!active.model || !active.providerId || (active.provider && !active.provider.keySet && ctx.store.get().settings?.loaded)) {
-      emit('onNeedSetup', '请先配置模型与 API Key。'); return null;
-    }
-    return active;
+  function validateConfiguration({resume=false}={}) {
+    try {
+      const fallback=resolveActive(ctx),savedTeam=resume?latestUser()?.collaboration:null;
+      const models=savedTeam||(!resume&&state.reasoningEffort==='xhigh')
+        ?resolveCollaboration(ctx,fallback,findModel,getProviders(ctx),savedTeam?.models):undefined;
+      const phase=savedTeam?.phase==='done'?'review':savedTeam?.phase;
+      const selected=models?.[phase==='final'?'design':phase||'design'];
+      const active=selected?{...selected,provider:getProviders(ctx).find(p=>p.id===selected.providerId)}:fallback;
+      if(!active.model||!active.providerId||(!active.provider?.keySet&&ctx.store.get().settings?.loaded))throw new Error('请先配置模型与 API Key。');
+      return {ok:true,active,models};
+    } catch(e) {emit('onNeedSetup',e.message);return {ok:false,error:e.message};}
   }
   async function send(text, images = [], opts = {}) {
     if (state.streaming || state.loading) return { ok: false, error: state.loading ? '会话正在加载' : '正在生成中' };
-    const active = validateModel(); if (!active) return { ok: false, error: '未配置模型' };
+    const config=validateConfiguration();if(!config.ok)return config;
+    const {active,models}=config;
     const content = String(text || '').trim();
     if (!content && !images.length && !opts.docs?.length) return { ok: false, error: '请输入内容' };
     const m = { role: 'user', content, ts: Date.now(), id: uid('msg'), turnId: uid('turn') };
+    if(models)m.collaboration={phase:'design',task:content,models,revisions:0,transitions:0};
     if (images.length) m.images = images;
     for (const k of ['brief', 'docs', 'assetPaths']) if (opts[k]) m[k] = opts[k];
     if (m.docs) m.docs = m.docs.map((d) => { const doc = { ...d, resultId: d.resultId || uid('attachment') }; ctx.agentToolResults.set(doc.resultId, doc.text || ''); return doc; });
@@ -297,43 +322,121 @@ export function createAgentLoop(ctx, hooks = {}) {
   async function run(active, resuming = false) {
     const runId = ++generation, controller = new AbortController(), signal = controller.signal;
     state.abort = controller; state.abortRequested = false; state.streaming = true; state.lastError = null;
-    state.providerId = active.providerId; state.model = active.model; state.usage = null; state.continuations = 0;
-    emit('onStreamingChange', true); status('thinking'); syncStore();
-    const info = findModel(ctx, active.providerId, active.model) || active.info;
+    if(!latestUser()?.collaboration){state.providerId = active.providerId; state.model = active.model;}
+    state.usage = null; state.continuations = 0;
+    let info = findModel(ctx, active.providerId, active.model) || active.info;
     const latest = state.messages.at(-1);
     let carry = resuming && latest?.role === 'assistant' && latest.incomplete && !latest.tool_calls?.length ? latest : null;
     let instruction = resuming ? '继续完成用户上一次任务。已成功执行的工具结果仍然有效，先检查当前状态，避免重复修改。从未完成处接着处理，不要重复已有正文。' : '', reconnects = 0, complete = false;
     const started = Date.now();
     const turn = latestUser(), modified = new Set(Object.entries(turn?.versions || {}).filter(([, refs]) => refs.pending).map(([id]) => id));
+    const priorElapsed = Math.max(0, Number(turn?.generationTiming?.elapsedMs) || 0);
+    if(turn)turn.generationTiming={elapsedMs:priorElapsed,startedAt:started,status:'running'};
+    state.runStartedAt=started;state.runElapsedMs=priorElapsed;
+    emit('onStreamingChange', true); status('thinking'); syncStore();
+    const team=turn?.collaboration;
+    if(team&&resuming&&team.phase==='done'){team.phase='review';team.reviewReads=0;team.reviewCaptureAttempted=false;team.reviewCaptures=0;team.visualLimitation='';team.task='重新检查当前工程并继续完成用户要求，避免重复已成功的修改。';}
+    let requiredTool='';
     const beforeMutation = async (projectId) => {
       if (!turn) throw new Error('缺少当前对话轮次，无法建立版本');
+      if(needsParallelVisual(turn.content)&&state.permission!=='read'&&!turn.parallelRuns?.length)throw new Error(parallelVisualSubject(turn.content)+' 制作需先调用 agent_parallel 派发独立绘图部分；后台运行时可继续完成不依赖结果的工程工作。');
       if (!turn.versions?.[projectId]?.before) await turnCheckpoint(turn, projectId, 'before');
       if (!modified.has(projectId)) {
         turn.versions[projectId].pending = true; delete turn.versions[projectId].after;
         modified.add(projectId); await persistNow(); emit('onVersionsChanged', turn);
       }
     };
+    const parallelOptions=(callId)=>({signal,callId,sessionId:`${state.projectId||'workspace'}:${state.sessionId}`,
+      capabilities:state.capabilities,raw:state.raw,webSearch:state.webSearch,
+      context:[turn?.content,turn?.brief,state.summary?.text,team?.task,memorySource(state.messages.slice(Math.max(state.messages.indexOf(turn),state.messages.length-12)))].filter(Boolean).join('\n\n')});
+    let contextRecoveries=0, forceCompaction=false;
+    const jobs=new Map(), batches=()=>turn?.parallelRuns||[];
+    const pending=()=>batches().some(b=>b.workers.some(w=>['pending','running','tool'].includes(w.status)));
+    const outcomeStamp=()=>JSON.stringify(batches().map(b=>[b.id,...b.workers.map(w=>[w.id,w.status==='complete'||w.status==='error'||w.status==='stopped'?w.status:'pending',w.attempts])]));
+    function dispatch(batch,callId=batch.toolCallId) {
+      if(!jobs.has(batch.id)&&batch.status!=='complete') {
+        const job=runParallel(batch,parallelOptions(callId));
+        jobs.set(batch.id,job);
+        // Keep a handler attached even while the lead is doing other work.
+        void job.catch(()=>{}).finally(()=>{if(jobs.get(batch.id)===job)jobs.delete(batch.id);});
+      }
+      return parallelResult(batch);
+    }
+    function selectParallel(args={}) {
+      if(args.batchId!==undefined&&typeof args.batchId!=='string')throw new Error('batchId 必须是字符串');
+      const selected=args.batchId?batches().filter(b=>b.id===args.batchId):batches();
+      if(args.batchId&&!selected.length)throw new Error('没有找到此并行任务批次');
+      if(args.taskIds!==undefined&&(!args.batchId||!Array.isArray(args.taskIds)||!args.taskIds.length||args.taskIds.some(id=>typeof id!=='string'||!selected[0].workers.some(w=>w.id===id))))throw new Error('taskIds 需要有效 batchId 和该批次内的任务 ID');
+      return selected;
+    }
+    async function inspectParallel(args={},shouldWait=false) {
+      const selected=selectParallel(args);
+      const timeout=args.timeoutMs??30000;
+      if(shouldWait&&(!Number.isInteger(timeout)||timeout<0||timeout>60000))throw new Error('timeoutMs 必须是 0–60000 的整数');
+      const workers=()=>selected.flatMap(b=>b.workers).filter(w=>!args.taskIds||args.taskIds.includes(w.id));
+      const isPending=()=>workers().some(w=>['pending','running','tool'].includes(w.status));
+      const deadline=Date.now()+timeout;
+      while(shouldWait&&isPending()&&Date.now()<deadline){if(signal.aborted)throw aborted();await wait(Math.min(50,deadline-Date.now()),signal);}
+      if(signal.aborted)throw aborted();
+      const results=selected.map(parallelResult),complete=workers().every(w=>w.status==='complete');
+      const failed=workers().some(w=>['error','stopped'].includes(w.status));
+      return {ok:!failed,complete,status:isPending()?'running':failed?'error':'complete',...(shouldWait?{timedOut:isPending()}:{}),
+        ...(args.batchId?{batchId:args.batchId}:{}),...(args.taskIds?{taskIds:args.taskIds}:{}),batches:results,
+        ...(failed?{error:'所需子任务尚未成功，完整进度已保存；请重试失败任务后再整合。'}:{}),
+        summary:complete?'所需子代理结果已就绪':isPending()?'子代理仍在后台工作，可继续独立任务':'部分子任务失败，需重试'};
+    }
     try {
+      // An interrupted batch is application work already accepted by the user.
+      // Restore incomplete workers in the background; the coordinator can
+      // immediately continue independent work with original routing preserved.
+      if(resuming)for(const batch of turn?.parallelRuns||[])if(batch.status!=='complete'){
+        const call=state.messages.flatMap(m=>m.tool_calls||[]).find(c=>c.id===batch.toolCallId);
+        if(!call)continue;
+        emit('onToolStart',call);status('tool');
+        const result=dispatch(batch,call.id);
+        let tool=state.messages.find(m=>m.role==='tool'&&m.tool_call_id===call.id);
+        if(tool)tool.content=JSON.stringify(result);
+        else{tool={role:'tool',id:uid('msg'),ts:Date.now(),tool_call_id:call.id,name:'agent_parallel',content:JSON.stringify(result)};state.messages.push(tool);}
+        ctx.agentToolResults.set(call.id,tool.content);emit('onToolResult',call,result);syncStore();await persistNow();
+        if(signal.aborted)throw aborted();
+      }
       for (let round = 1; round <= MAX_ROUNDS; round++) {
         if (signal.aborted) throw aborted();
         const editor = state.projectId ? ctx.getEditor?.() : null;
         try {
-          const deck = editor?.bridge ? await editor.bridge.call('getState', {}) : ctx.store.get().deck;
+          const deck = editor?.bridge ? await withEditorTask(()=>editor.bridge.call('getState', {}),signal) : ctx.store.get().deck;
           state.capabilities = deck?.capabilities || null;
           state.raw = deck?.raw === true || deck?.mode === 'raw' || isRawCapabilities(state.capabilities);
         } catch { /* tools will report precise editor availability */ }
         // Refresh the user-owned switch each round, so disabling it takes effect
         // even in an ongoing conversation. The server checks it again on request.
         try { const settings = await ctx.api.getSettings(); ctx.store.update((s) => { s.settings.imageGeneration = settings.imageGeneration || { enabled: false }; }); } catch { /* server remains authoritative */ }
-        const tools = getToolDefinitionsForPermission(state.permission, { webSearch: state.webSearch, imageGeneration: ctx.store.get().settings.imageGeneration?.enabled === true });
-        const messages = await buildMessages(info, tools, signal);
-        if (instruction) messages.push({ role: 'system', content: instruction });
-        const payload = { providerId: active.providerId, model: active.model,
+        const role=team ? (team.phase==='final'?'design':team.phase) : null;
+        const selected=team ? team.models[role] : active;
+        if(!selected?.providerId||!selected?.model)throw new Error('子代理模型配置不完整，请检查 API 设置');
+        info=findModel(ctx,selected.providerId,selected.model)||selected.info;
+        const rolePermission=team&&['review','final'].includes(team.phase)?'read':state.permission;
+        if(team?.phase==='review')team.visualReviewRequired=info?.vision===true&&!!state.projectId;
+        const tools = getToolDefinitionsForPermission(rolePermission, { webSearch: state.webSearch, imageGeneration: ctx.store.get().settings.imageGeneration?.enabled === true,vision:info?.vision===true });
+        tools.push(...parallelDefinitions);
+        if(team)tools.push(handoffDefinition);
+        const observedParallel=outcomeStamp();
+        const extra=[];
+        if(batches().length)extra.push({role:'system',content:'Background subagent status (project data): '+JSON.stringify(batches().map(b=>({batchId:b.id,status:parallelResult(b).status,workers:b.workers.map(w=>({id:w.id,status:w.status}))})))+'\nContinue independent work while tasks run. Use agent_wait only when dependent outputs are needed. Read complete artifacts before integration. Inspect the integrated project before final approval.'});
+        if(instruction)extra.push({role:'system',content:instruction});
+        const messages = await buildMessages(info,tools,signal,{selected,team,permission:rolePermission,extra,recovery:contextRecoveries,force:forceCompaction});
+        forceCompaction=false;
+        const payload = { providerId: selected.providerId, model: selected.model,
           sessionId: `${state.projectId || 'workspace'}:${state.sessionId}`, messages, tools,
-          maxTokens: maxOutput(info), temperature: readAgentSettings(ctx).temperature, reasoning_effort: effortOf(state.reasoningEffort) };
-        if (round === 1 && !state.raw && canUseTool(state.permission, 'deck_compose') && state.messages.at(-1)?.brief) payload.toolChoice = { type: 'function', function: { name: 'deck_compose' } };
-        emit('onAssistantStart', { round, continued: !!carry }); status(carry ? 'continuing' : 'thinking');
-        const acc = { id: uid('msg'), content: '', reasoning: '', calls: [], carryId: carry?.id };
+          maxTokens: maxOutput(info), temperature: readAgentSettings(ctx).temperature, reasoning_effort: team?(role==='implement'?'medium':'high'):effortOf(state.reasoningEffort) };
+        const requireParallel=rolePermission!=='read'&&needsParallelVisual(turn?.content)&&!batches().length;
+        if(requiredTool)payload.toolChoice={type:'function',function:{name:requiredTool}};
+        else if(requireParallel)payload.toolChoice={type:'function',function:{name:'agent_parallel'}};
+        else if(team?.phase==='review'&&team.visualReviewRequired&&!team.reviewCaptureAttempted)payload.toolChoice={type:'function',function:{name:'deck_capture_slide'}};
+        if (!requireParallel && !team && round === 1 && !state.raw && canUseTool(state.permission, 'deck_compose') && state.messages.at(-1)?.brief) payload.toolChoice = { type: 'function', function: { name: 'deck_compose' } };
+        const agentRole=team?{role:team.phase,label:team.phase==='final'?'设计代理 · 最终交付':AGENT_ROLES.find(r=>r.id===role).label,model:selected.model,providerId:selected.providerId}:undefined;
+        emit('onAssistantStart', { round, continued: !!carry,agentRole }); status(carry ? 'continuing' : 'thinking');
+        const acc = { id: uid('msg'), content: '', reasoning: '', calls: [], carryId: carry?.id,agentRole };
         state.pendingAcc = acc;
         let finish = null, transportError = null;
         try {
@@ -349,11 +452,7 @@ export function createAgentLoop(ctx, hooks = {}) {
                 c.function.name += p.function?.name || ''; c.function.arguments += p.function?.arguments || '';
               }
             }
-            if (e.type === 'usage') {
-              const previous = state.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-              state.usage = Object.fromEntries(['prompt_tokens', 'completion_tokens', 'total_tokens'].map((k) => [k, previous[k] + (Number(e.usage?.[k]) || 0)]));
-              emit('onUsage', state.usage);
-            }
+            if (e.type === 'usage') addUsage(e.usage);
             if (e.type === 'done') finish = e.incomplete ? null : e.finish_reason;
           }, signal);
         } catch (err) { if (signal.aborted) throw err; transportError = err; }
@@ -369,8 +468,12 @@ export function createAgentLoop(ctx, hooks = {}) {
           if (carry && !calls.length) {
             carry.content = mergeContinuation(carry.content, acc.content);
             carry.reasoning = (carry.reasoning || '') + acc.reasoning;
+            // A compacted partial message may grow in place. Its new suffix is
+            // unsummarized and must reach the next turn, including after reload.
+            const index=state.messages.indexOf(carry);
+            if(state.summary?.through>index){state.summary={...state.summary,through:index};state.foldedCount=index;}
           } else {
-            message = { role: 'assistant', id: acc.id, ts: Date.now(), content: acc.content, model: active.model, turnId: [...state.messages].reverse().find((m) => m.role === 'user')?.turnId };
+            message = { role: 'assistant', id: acc.id, ts: Date.now(), content: acc.content, model: selected.model,agentRole, turnId: [...state.messages].reverse().find((m) => m.role === 'user')?.turnId };
             if (acc.reasoning) message.reasoning = acc.reasoning;
             if (calls.length) message.tool_calls = calls;
             state.messages.push(message);
@@ -380,6 +483,11 @@ export function createAgentLoop(ctx, hooks = {}) {
           emit('onAssistantEnd', message, { round, finishReason: finish, continued: !!carry, incomplete: message.incomplete });
         }
         state.pendingAcc = null; syncStore(); persist();
+        if (transportError && isContextOverflow(transportError) && contextRecoveries < 2) {
+          contextRecoveries++; forceCompaction=true;
+          carry=message?.role==='assistant'&&!message.tool_calls?.length?message:carry;
+          status('compacting'); continue;
+        }
         if (transportError || !finish) {
           const retryable = !transportError || transportError.recoverable === true || (!transportError.status && transportError.recoverable !== false) || [429, 502, 503, 504].includes(transportError.status);
           if (!retryable || reconnects >= MAX_RECONNECTS) throw transportError || new Error('连接多次中断。已保留完整进度，点击继续可从这里接着处理。');
@@ -400,19 +508,75 @@ export function createAgentLoop(ctx, hooks = {}) {
         instruction = ''; carry = null;
         if (['content_filter', 'refusal'].includes(finish)) throw new Error('模型服务未完成这次回答，已保留输出。可修改请求后重试。');
         if (!calls.length) {
+          if(requireParallel){
+            if(requiredTool==='agent_parallel')throw new Error('当前模型未能调用并行子代理，'+parallelVisualSubject(turn?.content)+' 制作尚未完成。请继续或更换支持工具调用的模型。');
+            requiredTool='agent_parallel';instruction='Call agent_parallel now with 2–4 independent visual authoring tasks appropriate to the user request. For SVG use artifact:"svg" for complete drawing source and artifact:"analysis" for independent annotation/factual review; provide sharedContext with viewBox, bounds, anchors, ID namespaces, typography, palette and acceptance criteria. For 3D use artifact:"three" for complete geometry/scene code. Continue independent project work after dispatch, collect complete artifacts at dependency boundaries, integrate and inspect the actual result.';continue;
+          }
+          if(team?.phase==='design'&&acc.content.trim()) {
+            handoff(team,'implement',acc.content);await persistNow();continue;
+          }
+          // The lead may finish independent work before its workers. Join only
+          // here, then give it another turn to integrate the newly arrived output.
+          if(pending()) {
+            status('tool');
+            await Promise.all([...jobs.values()]);
+            if(signal.aborted)throw aborted();
+            if(batches().some(b=>!parallelResult(b).complete))throw new Error('部分后台子代理未完成，完整进度已保留；请继续重试后再交付。');
+            instruction='Background workers have now finished. Read their full artifacts in agent_parallel_status or the updated dispatch results. Integrate the required outputs and inspect the actual project before final delivery; your previous response did not complete this task.';
+            continue;
+          }
+          if(batches().some(b=>!parallelResult(b).complete))throw new Error('部分后台子代理未完成，完整进度已保留；请继续重试后再交付。');
+          if(observedParallel!==outcomeStamp()) {
+            instruction='Background worker results arrived during your last request. Read the complete artifacts with agent_parallel_status, integrate the required outputs and validate the actual project before final delivery.';continue;
+          }
+          if(team?.phase==='review') {
+            const next=team.visualReviewRequired&&!team.reviewCaptureAttempted?'deck_capture_slide':team.reviewReads?'agent_handoff':'deck_get_state';
+            if(requiredTool===next)throw new Error(`检查模型未能调用 ${next}，协作尚未完成。请为检查角色配置支持工具调用的模型，然后继续处理。`);
+            requiredTool=next;
+            instruction=next==='deck_capture_slide'?'Call deck_capture_slide now to visually inspect the actual page. Use the returned image and geometry before deciding whether to approve or return corrections.':team.reviewReads?'Call agent_handoff now: use complete to approve or implement/design for corrections; include actual evidence in task.':'Call deck_get_state now to inspect the real project before approving or returning corrections.';
+            continue;
+          }
           if (!acc.content.trim()) throw new Error('模型没有返回可见回答。请点击继续，或检查当前模型的工具和输出配置。');
+          if(team&&team.phase!=='final') {
+            const next=team.phase==='design'?'implement':'review';
+            handoff(team,next,acc.content);await persistNow();
+            continue;
+          }
           if (message) { message.incomplete = false; message.duration = Date.now() - started; }
+          if(team)team.phase='done';
           complete = true; break;
         }
         emit('onToolCalls', calls);
+        let transferred=false;
         for (const call of calls) {
           if (signal.aborted) throw aborted();
           emit('onToolStart', call); status('tool');
           // Mutations execute once, sequentially. Transport recovery never replays results.
-          const result = await executor.execute(call.function.name, JSON.parse(call.function.arguments || '{}'), {
-            permission: state.permission, capabilities: state.capabilities, raw: state.raw, webSearch: state.webSearch, signal, beforeMutation,
-          });
-          const tool = { role: 'tool', id: uid('msg'), ts: Date.now(), tool_call_id: call.id, name: call.function.name, content: JSON.stringify(result) };
+          let result;
+          if(transferred)result={ok:false,error:'本轮已交接，后续工具未执行。新角色应读取结果后再操作。'};
+          else if(call.function.name==='agent_handoff') {
+            const args=JSON.parse(call.function.arguments||'{}');
+            result=team&&['review','complete'].includes(args.target)&&(pending()||batches().some(b=>!parallelResult(b).complete)||observedParallel!==outcomeStamp())
+              ?{ok:false,error:'进入最终检查或验收前，请用 agent_wait 获取所需子代理的完整结果，整合并验证实际工程。',batches:batches().map(parallelResult)}
+              :team?handoff(team,args.target,args.task):{ok:false,error:'请在极高思考强度下启用子代理协作'};
+            transferred=result.ok;
+          } else if(call.function.name==='agent_parallel') {
+            try {
+              const batch=prepareParallelBatch(turn,JSON.parse(call.function.arguments||'{}'),{active,team,toolCallId:call.id});
+              result=dispatch(batch,call.id);
+            } catch(error){result={ok:false,error:error.message};}
+          } else if(['agent_wait','agent_parallel_status'].includes(call.function.name)) {
+            try{result=await inspectParallel(JSON.parse(call.function.arguments||'{}'),call.function.name==='agent_wait');}
+            catch(error){if(signal.aborted)throw error;result={ok:false,error:error.message};}
+          } else result = await withEditorTask(()=>executor.execute(call.function.name, JSON.parse(call.function.arguments || '{}'), {
+            permission: rolePermission, capabilities: state.capabilities, raw: state.raw, webSearch: state.webSearch, signal, beforeMutation,
+          }),signal);
+          if(team?.phase==='review'&&call.function.name==='deck_capture_slide'&&!transferred){team.reviewCaptureAttempted=true;if(result.ok!==false&&!result.error)team.reviewCaptures=(team.reviewCaptures||0)+1;else team.visualLimitation=result.error||'The page image could not be captured.';}
+          if(team?.phase==='review'&&/^(deck_capture_slide|deck_get_state|deck_read_slide|deck_get_element|deck_get_html|deck_get_timeline|file_read|file_list|project_info|app_call_api)$/.test(call.function.name)&&result.ok!==false&&!result.error)team.reviewReads=(team.reviewReads||0)+1;
+          if(result.ok!==false&&!result.error&&(call.function.name===requiredTool||transferred||(requiredTool==='deck_get_state'&&team?.reviewReads)))requiredTool='';
+          const {images:capturedImages,...textResult}=result;
+          const tool = { role: 'tool', id: uid('msg'), ts: Date.now(), tool_call_id: call.id, name: call.function.name, content: JSON.stringify(textResult),agentRole };
+          if(call.function.name==='deck_capture_slide'&&capturedImages?.length)tool.images=capturedImages;
           state.messages.push(tool); ctx.agentToolResults.set(call.id, tool.content);
           if(result.ok && result.project?.id && /^(projects\.(create|import|duplicate)|ppt\.import)$/.test(result.operation||'')) {
             const id=result.project.id;turn.versions||={};turn.versions[id]||={};turn.versions[id].pending=true;modified.add(id);
@@ -433,8 +597,10 @@ export function createAgentLoop(ctx, hooks = {}) {
       if (acc && (acc.content || acc.reasoning)) {
         let m = acc.carryId ? state.messages.find((m) => m.id === acc.carryId) : null;
         if (m) { m.content = mergeContinuation(m.content, acc.content); m.reasoning = (m.reasoning || '') + acc.reasoning; }
-        else { m = { role: 'assistant', id: acc.id, ts: Date.now(), content: acc.content, reasoning: acc.reasoning, model: active.model }; state.messages.push(m); }
+        else { m = { role: 'assistant', id: acc.id, ts: Date.now(), content: acc.content, reasoning: acc.reasoning, model:acc.agentRole?.model||active.model,agentRole:acc.agentRole }; state.messages.push(m); }
         m.incomplete = true; m.aborted = signal.aborted;
+        const index=state.messages.indexOf(m);
+        if(state.summary?.through>index){state.summary={...state.summary,through:index};state.foldedCount=index;}
         emit('onAssistantEnd', m, { aborted: signal.aborted, incomplete: true });
       }
       state.pendingAcc = null;
@@ -445,6 +611,11 @@ export function createAgentLoop(ctx, hooks = {}) {
       if (signal.aborted) { state.abortRequested = true; emit('onAborted'); }
       else { state.lastError = err; emit('onError', { error: err, message: err.message }); }
     } finally {
+      // No background request or queued editor task may survive a stopped run
+      // and publish output into the next chat. Successful delivery already joined.
+      if(!complete)controller.abort();
+      await Promise.allSettled([...jobs.values()]);
+      await editorTasks.catch(()=>{});
       if (runId === generation) {
         for (const projectId of modified) {
           if (ctx.agentDeletedProjectId === projectId) continue;
@@ -461,7 +632,11 @@ export function createAgentLoop(ctx, hooks = {}) {
             emit('onCheckpointError', error);
           }
         }
+        const elapsedMs=priorElapsed+Date.now()-started;
+        if(turn)turn.generationTiming={...turn.generationTiming,elapsedMs,finishedAt:Date.now(),status:complete?'complete':state.abortRequested?'stopped':'incomplete'};
+        state.runStartedAt=0;state.runElapsedMs=elapsedMs;
         state.streaming = false; state.abort = null; state.pendingAcc = null;
+        measureContext();
         status(state.lastError ? 'error' : state.abortRequested ? 'stopped' : 'idle');
         syncStore(); emit('onStreamingChange', false); await flush();
         emit('onDone', { aborted: state.abortRequested, incomplete: !complete, error: state.lastError?.message });
@@ -472,11 +647,11 @@ export function createAgentLoop(ctx, hooks = {}) {
   function stop() { state.abortRequested = true; state.abort?.abort(); return { ok: true }; }
   function retryLast() {
     if (state.streaming || state.loading) return { ok: false, error: '正在处理' };
-    const active = validateModel(); if (!active) return { ok: false, error: '未配置模型' };
     if (!state.messages.some((m) => m.role === 'user')) return { ok: false, error: '没有可继续的任务' };
+    const config=validateConfiguration({resume:true});if(!config.ok)return config;
     // Keep successful tools and original requests. Retrying must not undo or duplicate edits.
     emit('onBeforeResume');
-    activeRun = run(active, true);
+    activeRun = run(config.active, true);
     return activeRun;
   }
   async function newChat() {
@@ -485,19 +660,22 @@ export function createAgentLoop(ctx, hooks = {}) {
     const session = uid('chat');
     return load(state.projectId, session);
   }
-  function setSkills(ids) { state.skills = normalizeEnabledIds(state.catalog, ids); emit('onSkillsChange', state.skills); syncStore(); persist(); return state.skills; }
+  function setSkills(ids) { state.sessionMeta.skillsCustomized = true; state.skills = normalizeEnabledIds(state.catalog, ids); measureContext(); emit('onSkillsChange', state.skills); syncStore(); persist(); return state.skills; }
   function toggleSkill(id) { const set = new Set(state.skills); set.has(id) ? set.delete(id) : set.add(id); return setSkills([...set]); }
-  function setProvider(providerId, model) { rememberSelection(providerId, model); state.providerId = providerId; state.model = model; syncStore(); }
+  function setProvider(providerId, model) { rememberSelection(providerId, model); state.providerId = providerId; state.model = model; measureContext(); syncStore(); }
   function setOptions(options = {}) {
     if (options.permission !== undefined) state.permission = normalizePermission(options.permission);
     if (options.reasoningEffort !== undefined) state.reasoningEffort = effortOf(options.reasoningEffort);
     if (options.webSearch !== undefined) state.webSearch = !!options.webSearch;
-    ctx.store.update((s) => Object.assign(s.agent, { permission: state.permission, reasoningEffort: state.reasoningEffort, webSearch: state.webSearch }));
+    if (options.creativeMotion !== undefined) state.creativeMotion = options.creativeMotion===true;
+    if (options.fastMode !== undefined) state.fastMode = options.fastMode===true;
+    ctx.store.update((s) => Object.assign(s.agent, { permission: state.permission, reasoningEffort: state.reasoningEffort, webSearch: state.webSearch,creativeMotion:state.creativeMotion,fastMode:state.fastMode }));
+    measureContext();
     return getOptions();
   }
-  function getOptions() { return { permission: state.permission, permissionLabel: permissionLabel(state.permission), reasoningEffort: state.reasoningEffort, webSearch: state.webSearch, capabilities: state.capabilities, raw: state.raw }; }
+  function getOptions() { return { permission: state.permission, permissionLabel: permissionLabel(state.permission), reasoningEffort: state.reasoningEffort, webSearch: state.webSearch,creativeMotion:state.creativeMotion,fastMode:state.fastMode, capabilities: state.capabilities, raw: state.raw }; }
   function getState() { const active = resolveActive(ctx); return { ...state, messages: state.messages.slice(), skills: state.skills.slice(), context: state.lastContext, providerId: active.providerId, model: active.model, modelInfo: active.info, modelBadges: modelBadges(active.info), catalog: state.catalog || getCachedCatalog() }; }
-  return { load, send, stop, retryLast, resume: retryLast, newChat, setSkills, toggleSkill, setProvider, setOptions, getOptions, getState, flush, createCheckpoint, restoreCheckpoint,
+  return { load, send, stop, retryLast, resume: retryLast, newChat, setSkills, toggleSkill, setProvider, setOptions, getOptions, getState, validateConfiguration, refreshContext: measureContext, flush, createCheckpoint, restoreCheckpoint,
     listSessions: () => ctx.api.listChats(state.projectId),
     get messages() { return state.messages; }, get skills() { return state.skills; }, get streaming() { return state.streaming; }, get projectId() { return state.projectId; },
     get permission() { return state.permission; }, get reasoningEffort() { return state.reasoningEffort; }, isStreaming: () => state.streaming,

@@ -4,7 +4,7 @@ import http from 'node:http';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DEFAULT_IMAGE_SETTINGS, publicImageSettings, updateImageSettings, generateImage } from '../server/image-generation.mjs';
+import { DEFAULT_IMAGE_SETTINGS, publicImageSettings, updateImageSettings, discoverImageModels, generateImage } from '../server/image-generation.mjs';
 import { getToolDefinitionsForPermission, createToolExecutor } from '../app/js/agent/tools.js';
 import { buildNavigationHTML, resolveChapters } from '../app/js/core/deck-navigation.js';
 import { buildCreationBrief } from '../app/js/agent/blueprints.js';
@@ -14,6 +14,10 @@ async function fixture(fn) {
   const requests = [], root = await fs.mkdtemp(path.join(os.tmpdir(), 'wds-images-'));
   let mode = 'base64', port;
   const server = http.createServer(async (req, res) => {
+    if (req.url === '/v1/models') {
+      res.writeHead(mode === 'error' ? 401 : 200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ data: mode === 'empty' ? [{ id: 'gpt-chat' }] : [{ id: 'flux-test' }, { id: 'gpt-image-1.5' }, { id: 'gpt-image-1' }, { id: 'gpt-chat' }, { id: 'text-embedding-3' }] })); return;
+    }
     if (req.method === 'GET') { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(png); return; }
     let raw = ''; for await (const chunk of req) raw += chunk;
     requests.push({ url: req.url, body: JSON.parse(raw), authorization: req.headers.authorization });
@@ -43,6 +47,29 @@ test('Disabled image generation cannot make an upstream call or write any file',
   assert.equal(requests.length, 0); assert.deepEqual(await fs.readdir(root), []);
 }));
 
+test('Image discovery filters chat/embedding models, prioritizes GPT and never changes opt-in or writes files', async () => fixture(async (f) => {
+  const config = updateImageSettings({}, { baseUrl: f.config.baseUrl + '/images/generations', apiKey: 'test-secret' });
+  const found = await discoverImageModels(config);
+  assert.equal(found.source, 'upstream'); assert.equal(found.recommended, 'gpt-image-1.5');
+  assert(!found.models.some((m) => /chat|embedding/.test(m.id))); assert.equal(config.enabled, false);
+  assert.deepEqual(await fs.readdir(f.root), []); assert.equal(f.requests.length, 0);
+  f.mode('error'); await assert.rejects(() => discoverImageModels(config), /HTTP 401/);
+  f.mode('empty'); await assert.rejects(() => discoverImageModels(config), /未返回/);
+}));
+
+test('Only API Key and Base URL are required; auto model and Agent-selected GPT parameters reach the upstream', async () => fixture(async (f) => {
+  const config = updateImageSettings({}, { enabled: true, baseUrl: f.config.baseUrl, apiKey: 'test-secret' });
+  assert.equal(config.model, 'auto');
+  const result = await generateImage({ config, projectDir: f.root, body: { prompt: 'leaf', size: '1536x1024', quality: 'high', background: 'transparent', outputFormat: 'webp', outputCompression: 82 } });
+  assert.equal(result.model, 'gpt-image-1.5');
+  assert.deepEqual(f.requests[0].body, { model: 'gpt-image-1.5', prompt: 'leaf', n: 1, size: '1536x1024', quality: 'high', background: 'transparent', output_format: 'webp', output_compression: 82 });
+  const cached = { ...config, models: [{ id: 'gpt-image-1.5' }] };
+  for (const body of [{ model: 'unknown' }, { background: 'transparent', outputFormat: 'jpeg' }, { outputFormat: 'png', outputCompression: 50 }, { quality: 'hd' }, { size: '512x512' }]) {
+    await assert.rejects(() => generateImage({ config: cached, projectDir: f.root, body: { prompt: 'leaf', ...body } }));
+  }
+  assert.equal(f.requests.length, 1);
+}));
+
 test('Base64 and URL images are verified, saved locally and use the configured model without optional-format assumptions', async () => fixture(async (f) => {
   const result = await generateImage({ config: f.config, body: { prompt: '知识生长的树' }, projectDir: f.root });
   assert(result.url.startsWith('assets/generated-')); assert.equal(result.model, 'image-test'); assert.deepEqual(await fs.readFile(path.join(f.root, result.url)), png);
@@ -60,7 +87,11 @@ test('Cancellation and switching the feature off while generating prevent asset 
   f.mode('delay'); const controller = new AbortController();
   const pending = generateImage({ config: f.config, body: { prompt: 'tree' }, projectDir: f.root, signal: controller.signal }); setTimeout(() => controller.abort(), 20);
   await assert.rejects(() => pending, /取消/);
-  await assert.rejects(() => generateImage({ config: f.config, body: { prompt: 'tree' }, projectDir: f.root, stillEnabled: async () => false }), /已关闭/);
+  let enabledChecks = 0;
+  await assert.rejects(() => generateImage({ config: f.config, body: { prompt: 'tree' }, projectDir: f.root, stillEnabled: async () => ++enabledChecks === 1 }), /已关闭/);
+  const requestsBefore = f.requests.length;
+  await assert.rejects(() => generateImage({ config: f.config, body: { prompt: 'tree' }, projectDir: f.root, stillEnabled: async () => false }), /未发起/);
+  assert.equal(f.requests.length, requestsBefore);
   assert.deepEqual(await fs.readdir(f.root), []);
 }));
 
@@ -82,10 +113,20 @@ test('Directory links use stable IDs, escape labels and validate target/self lin
   assert.throws(() => resolveChapters([{ slideIndex: 8 }], slides, 1), /有效页面/);
 });
 
-test('Creation briefs budget a real contents page within the requested page count', () => {
+test('Creation briefs leave navigation design to the model within the requested page count', () => {
   for (const pages of [3,5,6,8,16,20]) {
     const brief = buildCreationBrief({ topic: '科学知识', pages });
-    const lines = brief.brief.split('\n').filter((l) => /^\d+\. .*｜/.test(l));
-    assert.equal(lines.length, pages); assert.equal(lines.some((l) => l.includes('章节目录')), pages >= 6);
+    const lines = brief.brief.split('\n').filter((l) => /^\d+\. .* \|/.test(l));
+    assert.equal(lines.length, pages); assert.equal(lines.some((l) => l.includes('Navigation decision (optional)')), pages >= 6);
+    assert(brief.brief.includes('invent its form')||pages<6);
   }
+});
+
+test('Custom directories accept original layouts, bind stable IDs and reject broken chapter links',()=>{
+  const chapters=resolveChapters([{title:'First',slideIndex:2},{title:'Second',slideIndex:3}],[{id:'cover'},{id:'toc'},{id:'a'},{id:'b'}],1);
+  const html='<h1>Research atlas</h1>'+[0,1].map(i=>`<button class="original-${i}" data-wds-target="{{target:${i}}}" data-wpx-action="go-id:{{target:${i}}}">${i}</button>`).join('');
+  const out=buildNavigationHTML({style:'custom',chapters,html,css:'.wds-nav-custom button{border-radius:0}'});
+  assert(out.includes('data-wds-navigation="custom"'));assert(out.includes('go-id:a'));assert(out.includes('go-id:b'));assert(!out.includes('{{target:'));assert(!out.includes('wds-nav-petals'));
+  assert.throws(()=>buildNavigationHTML({style:'custom',chapters,html:html.replaceAll('{{target:1}}','broken')}),/章节/);
+  assert.throws(()=>buildNavigationHTML({style:'invented',chapters}),/custom/);
 });

@@ -5,22 +5,47 @@
   "type": "module",
   "description": "WebDeck Studio · 网页演播工作台（仿 PowerPoint 界面 + 内置 AI Agent）",
   "scripts": {
-    "postinstall": "node scripts/sync-vendor.mjs",
+    "postinstall": "node scripts/sync-vendor.mjs && node scripts/pack-hanzi.mjs",
     "start": "node server.mjs",
+    "launch": "node scripts/start.mjs",
+    "build:static": "node scripts/build-static.mjs",
+    "qa:static": "node scripts/qa-standalone.mjs",
+    "test:launcher": "node --test scripts/launcher.test.mjs",
     "dev": "node server.mjs",
     "qa": "node scripts/qa.mjs",
     "test:agent": "node --test scripts/agent-runtime.test.mjs scripts/version-store.test.mjs",
     "test:authoring": "node --test scripts/authoring.test.mjs scripts/image-generation.test.mjs",
     "qa:agent": "node scripts/qa-agent-workspace.mjs",
-    "qa:authoring": "node scripts/qa-authoring-features.mjs"
+    "qa:authoring": "node scripts/qa-authoring-features.mjs",
+    "qa:editor": "node scripts/qa-editor-refinements.mjs",
+    "test:three": "node --test scripts/three-content.test.mjs scripts/three-export.test.mjs scripts/three-tools.test.mjs",
+    "test:export": "node --test scripts/export-plan.test.mjs",
+    "qa:three": "node scripts/qa-three.mjs",
+    "qa:parallel": "node scripts/qa-parallel.mjs",
+    "test:favorites": "node --test scripts/favorites.test.mjs",
+    "test:webdav": "node --test scripts/webdav.test.mjs",
+    "qa:type": "node scripts/qa-type.mjs",
+    "pack:hanzi": "node scripts/pack-hanzi.mjs"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "acorn": "^8.19.0",
+    "astring": "^1.9.0",
+    "css-tree": "^3.2.1",
     "dompurify": "^3.4.17",
     "fast-xml-parser": "^5.12.1",
+    "hanzi-writer-data": "^2.0.1",
+    "html2canvas-pro": "^2.6.4",
     "jszip": "^3.10.1",
-    "katex": "^0.19.1"
+    "katex": "^0.19.1",
+    "linkedom": "^0.18.15",
+    "three": "^0.181.1"
+  },
+  "devDependencies": {
+    "buffer": "^6.0.3",
+    "esbuild": "^0.28.2",
+    "path-browserify": "^1.0.1"
   }
 }

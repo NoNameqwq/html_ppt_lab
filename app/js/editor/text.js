@@ -31,13 +31,13 @@ function isEditing() {
 
 /* ================= 进入 / 退出文字编辑 ================= */
 
-async function beginEdit(elementId) {
+async function beginEdit(elementId, selectAll = false) {
   const bridge = getBridge();
   if (!bridge?.ready || !elementId) return { ok: false };
   if (editingId === elementId) return { ok: true };
   if (editingId) await endEdit({ silent: true });
   try {
-    const res = await bridge.beginTextEdit(elementId);
+    const res = await bridge.beginTextEdit(elementId, selectAll);
     if (res && res.ok === false) return { ok: false };
   } catch (err) {
     console.warn('[text] 进入文字编辑失败', err);
@@ -75,16 +75,16 @@ function onAreaPointerDown(e) {
 }
 
 function bindEvents() {
-  unsubs.push(bus.on('editor:begin-text', ({ elementId } = {}) => {
-    if (elementId) beginEdit(elementId);
+  unsubs.push(bus.on('editor:begin-text', ({ elementId, selectAll } = {}) => {
+    if (elementId) beginEdit(elementId, selectAll);
   }));
   unsubs.push(bus.on('editor:escape', () => {
     if (editingId) endEdit();
   }));
   unsubs.push(bus.on('editor:end-text', () => { endEdit(); }));
   // bridge 自己结束编辑（点击元素外部等）时同步本地状态
-  unsubs.push(bus.on('editor:text-editing', ({ editing } = {}) => {
-    if (!editing) editingId = null;
+  unsubs.push(bus.on('editor:text-editing', ({ editing, elementId } = {}) => {
+    editingId = editing ? elementId || editingId : null;
   }));
   unsubs.push(bus.on('deck:unload', () => { editingId = null; }));
 }

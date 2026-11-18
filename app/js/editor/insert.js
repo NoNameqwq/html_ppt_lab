@@ -8,6 +8,8 @@ import { toast } from '../core/toast.js';
 import { dialog } from '../core/dialog.js';
 import { icon } from '../ui/icons.js';
 import { initRichAuthoring } from './rich-authoring.js';
+import { initThreeAuthoring } from './three-authoring.js';
+import { initTypeAuthoring } from './type-authoring.js';
 
 let ctx = null;
 let dropBound = false;
@@ -27,6 +29,8 @@ export async function init(context) {
   bindEvents();
   registerCommands();
   initRichAuthoring(ctx);
+  initThreeAuthoring(ctx);
+  initTypeAuthoring(ctx);
 }
 
 function getBridge() {
@@ -62,7 +66,7 @@ async function selectInserted(res, options = {}) {
   } catch (err) {
     console.warn('[insert] 选中新元素失败', err);
   }
-  if (options.beginText) bus.emit('editor:begin-text', { elementId: res.elementId });
+  if (options.beginText) bus.emit('editor:begin-text', { elementId: res.elementId, selectAll: true });
 }
 
 /* ================= 文本框 ================= */

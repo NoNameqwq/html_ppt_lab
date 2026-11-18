@@ -1,37 +1,22 @@
 ---
 id: structured-navigation
 name: 章节结构与动画目录
-desc: 页数预算、分层目录、花瓣 / 轨道 / 阶梯导航与视觉连续
+desc: 页数预算、内容驱动的原创目录、层级交互与视觉连续
 category: content
-default: true
+default: false
 ---
-# 章节结构与动画目录
+# Content-driven navigation architecture
+Decide whether and how navigation supports this story. Petals, orbit and steps are optional shortcuts, not a fixed design menu.
 
-先梳理演示的主结论，再将内容分成 2–4 个有逻辑的章节；每个章节至少有一个实质内容页。常见关系是问题—原理—方法—应用，或现状—洞察—方案—证据。不要堆砌互不关联的页面。
+## Budget and structure
+Identify the main claim and real chapters. A short linear story may only need section labels. A larger or branching story may benefit from an overview or nested directory. Count every directory within the requested total. Do not deliver empty chapters.
 
-## 页数预算
+## Invent the composition
+Derive spatial organization and transitions from the content's relationships, audience and visual language. Create an original metaphor when useful, or a restrained typographic index when clearer. Examples are inspiration, never an exhaustive taxonomy. Continue chapter identity into destination pages.
 
-- 3–5 页：通常不单独加目录，用章节标记或轻量路径线保持连贯。用户明确要求时可安排目录。
-- 6–12 页：封面后 1 页总目录，2–4 章内容，最后收束；目录计入用户指定总页数。
-- 13–24 页：可考虑 3–6 章，只有某章有至少 3 个内容页且有预算时才增加下一级目录。
-- 不要因为增加目录超出页数；不要把只有封面、目录和结束的空章节交付给用户。
+## Implement
+Use deck_compose navigation or deck_set_navigation with style:custom, chapters, html and css. For chapter i create a real button with data-wds-target="{{target:i}}" and data-wpx-action="go-id:{{target:i}}". Tokens resolve to stable page IDs so links survive reordering. slideIndex is zero-based in the final array and cannot point to the directory itself.
+Scope CSS under .wds-nav-custom; provide meaningful labels, focus, touch targets and prefers-reduced-motion. Custom navigation uses destination page transitions; use allowed CSS/WAAPI/JS tools for original motion.
 
-## 设计母题与转场
-
-- petals：自然、人文、教育、知识生长。目录是展开的叶片 / 花瓣，点击选中叶片放大进入该章。章节页面延续叶片颜色、曲线或局部形状。
-- orbit：技术、系统、生态与关系。主题为核心，章节为轨道节点；进入节点后放大到细节。
-- steps：报告、提案、步骤与递进论证。章节沿网格逐步显现，进入后延续编号与边线。
-- 可从这三种模式衍生扇面、地图、路径、书页等，但要与主题有关，不能为了效果妨碍理解。
-- 每个章节有明确的色彩 / 编号身份；目录上的名字要与目标页内容吻合。下一级目录仍可用同一工具制作。
-
-## 项目调用方式
-
-优先在 deck_compose 的某一页写 navigation，代替该页 html/elements：
-
-```json
-{"name":"探索路径","navigation":{"style":"petals","title":"从问题到方法","chapters":[{"title":"认识问题","slideIndex":2},{"title":"找到方法","slideIndex":4}]}}
-```
-
-slideIndex 从 0 开始，按最终 slides 数组计算，不能指向目录自身。现有目录使用 deck_set_navigation {index,style,title,chapters} 替换；工具不会新增页。链接绑定页面 ID，移动页面后仍有效；不要手写易失效的数字页码。
-
-编辑界面显示完整目录，放映进入目录时自动展开，点击章节时选中图形放大并进入章节。减少动态效果开启时保持可读与可跳转。删除目标章节后须修正目录；不要声称悬空链接仍有效。
+## Inspect and refine
+Use deck_capture_slide on the overview and key destinations. Check readability, clipping, hierarchy and exact geometry; correct and recapture. Test navigation, return paths and reordered IDs separately. A still image does not prove interaction or animation.

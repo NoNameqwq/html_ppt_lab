@@ -1,5 +1,7 @@
 /* 服务端 API 客户端 */
 import { readSSE } from './sse.js';
+let workspaceRestoring=false;
+export const setWorkspaceRestoring=value=>{workspaceRestoring=!!value;};
 
 export class ApiError extends Error {
   constructor(message, status, payload) {
@@ -11,6 +13,7 @@ export class ApiError extends Error {
 }
 
 async function request(path, { method = 'GET', body, headers = {}, raw = false, signal } = {}) {
+  if(workspaceRestoring&&method!=='GET'&&!path.startsWith('/api/webdav/'))throw new ApiError('正在恢复工作区，请等待刷新',423);
   const opts = { method, headers: { ...headers }, signal };
   if (body !== undefined) {
     if (body instanceof Blob) {
@@ -39,6 +42,14 @@ async function request(path, { method = 'GET', body, headers = {}, raw = false, 
 const enc = encodeURIComponent;
 
 export const api = {
+  getWebDAV:()=>request('/api/webdav/config'),
+  putWebDAV:body=>request('/api/webdav/config',{method:'PUT',body}),
+  testWebDAV:body=>request('/api/webdav/test',{method:'POST',body}),
+  webDAVBackups:()=>request('/api/webdav/backups'),
+  webDAVStatus:()=>request('/api/webdav/status'),
+  webDAVBackup:()=>request('/api/webdav/backup',{method:'POST',body:{}}),
+  webDAVRestore:name=>request('/api/webdav/restore',{method:'POST',body:{name}}),
+  webDAVDownload:(name,recovery=false)=>request('/api/webdav/'+(recovery?'recovery':'download')+'?name='+enc(name),{raw:true}),
   /* ---------- 工程 ---------- */
   listProjects: () => request('/api/projects'),
   getProject: (id) => request('/api/projects/' + enc(id)),
@@ -74,9 +85,18 @@ export const api = {
   /* ---------- 设置 / AI ---------- */
   getSettings: () => request('/api/settings'),
   putSettings: (patch) => request('/api/settings', { method: 'PUT', body: patch }),
-  fetchModels: (payload) => request('/api/ai/models', { method: 'POST', body: payload }),
+  putUserSettings: (patch) => request('/api/settings/user', { method: 'PUT', body: patch }),
+  fetchImageModels: (payload, signal) => request('/api/image-models', { method: 'POST', body: payload, signal }),
+  testSearchSettings: (payload) => request('/api/settings/test-search', { method: 'POST', body: payload }),
+  testChatSettings: (payload, onEvent, signal) => api.chatStream(payload, onEvent, signal, '/api/settings/test-chat'),
+  fetchModels: (payload, signal) => request('/api/ai/models', { method: 'POST', body: payload, signal }),
   skills: () => request('/api/skills'),
   templates: () => request('/api/templates'),
+  listFavoriteElements: () => request('/api/elements'),
+  getFavoriteElement: id => request('/api/elements/' + enc(id)),
+  saveFavoriteElement: body => request('/api/elements', { method: 'POST', body }),
+  updateFavoriteElement: (id, body) => request('/api/elements/' + enc(id), { method: 'PATCH', body }),
+  deleteFavoriteElement: id => request('/api/elements/' + enc(id), { method: 'DELETE' }),
   saveTemplate: (body) => request('/api/templates',{method:'POST',body}),
   updateTemplate: (id,body) => request('/api/templates/'+enc(id),{method:'PATCH',body}),
   deleteTemplate: (id) => request('/api/templates/'+enc(id),{method:'DELETE'}),
@@ -91,8 +111,8 @@ export const api = {
    * @param {(evt:{type:string,[k:string]:any})=>void} onEvent
    * @param {AbortSignal} signal
    */
-  async chatStream(payload, onEvent, signal) {
-    const res = await fetch('/api/ai/chat', {
+  async chatStream(payload, onEvent, signal, endpoint = '/api/ai/chat') {
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stream: true, ...payload }),

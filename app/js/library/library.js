@@ -26,6 +26,7 @@ let gridWrapEl = null;
 let samplesEl = null;
 let subtitleEl = null;
 let countEl = null;
+let scopeTabs = null;
 let searchInput = null;
 let clearBtn = null;
 let sortSelect = null;
@@ -43,6 +44,7 @@ const state = {
   error: null,
   query: '',
   sort: 'updated',
+  scope: 'active',
   samplesLoading: false,
   samplesError: null,
   samplesLoaded: false,
@@ -61,6 +63,8 @@ export async function init(_ctx) {
   ctx.bus.registerCommand('file.rename', (payload) => commandTarget('rename', payload), { label: '重命名工程', group: '文件', icon: 'edit' });
   ctx.bus.registerCommand('file.delete', (payload) => commandTarget('delete', payload), { label: '删除工程', group: '文件', icon: 'trash' });
   ctx.bus.registerCommand('file.duplicate', (payload) => commandTarget('duplicate', payload), { label: '复制工程', group: '文件', icon: 'copy' });
+  ctx.bus.registerCommand('file.archive', (payload) => commandTarget('archive', payload), { label: '归档工程', group: '文件', icon: 'archive' });
+  ctx.bus.registerCommand('file.unarchive', (payload) => commandTarget('unarchive', payload), { label: '移出归档', group: '文件', icon: 'archive' });
 
   // 子模块各自注册 file.new / file.import / file.convert 命令（单个失败不影响其它）
   for (const [name, fn] of [['create', initCreate], ['import', initImport], ['convert', initConvert]]) {
@@ -148,9 +152,15 @@ function buildShell() {
       }, ic('plus', 16), h('span', null, '新建'))),
   );
 
+  scopeTabs = h('div', { class: 'lib-scope-tabs', role: 'group', 'aria-label': '工程分类' });
+  for (const [value, label] of [['active', '进行中'], ['archived', '已归档']]) {
+    const button = h('button', { type: 'button', class: 'lib-scope-tab', 'data-scope': value, 'aria-pressed': String(state.scope === value) }, label);
+    button.addEventListener('click', () => { closeCardMenu(); state.scope = value; writeStore(); renderProjects(); });
+    scopeTabs.append(button);
+  }
   const toolbar = h('div', { class: 'lib-toolbar' },
     h('div', { class: 'lib-toolbar-left' },
-      h('span', { class: 'lib-section-title' }, '全部工程'),
+      scopeTabs,
       h('span', { class: 'lib-count', ref: (el) => { countEl = el; } }, '')),
     h('div', { class: 'lib-toolbar-right' },
       h('label', { class: 'lib-sort' },
@@ -236,7 +246,7 @@ function applyQuery(raw) {
 
 function filteredProjects() {
   const q = state.query.trim().toLowerCase();
-  let list = projects.slice();
+  let list = projects.filter(p => (p.archived === true) === (state.scope === 'archived'));
   if (q) {
     list = list.filter((p) => {
       const kindText = p.kind === 'raw' ? '网页' : '网页';
@@ -316,7 +326,7 @@ async function loadSamples() {
 
 function writeStore() {
   ctx.store.update((s) => {
-    s.library = { projects: projects.slice(), loading: state.loading, query: state.query, error: state.error };
+    s.library = { projects: projects.slice(), loading: state.loading, query: state.query, scope: state.scope, error: state.error };
   });
 }
 
@@ -327,6 +337,9 @@ function writeStore() {
 function renderProjects() {
   if (!mounted || !gridEl) return;
   const list = filteredProjects();
+  for (const b of scopeTabs?.children || []) b.setAttribute('aria-pressed', String(b.dataset.scope === state.scope));
+  const samplesSection = samplesEl?.closest('.lib-samples-section');
+  if (samplesSection) samplesSection.hidden = state.scope === 'archived';
   updateHeader(list);
   if (state.loading && !projects.length) {
     gridEl.replaceChildren(renderSkeleton());
@@ -336,7 +349,12 @@ function renderProjects() {
     gridEl.replaceChildren(renderErrorState());
     return;
   }
-  if (!projects.length) {
+  if (!list.length && !state.query.trim()) {
+    if (state.scope === 'archived') {
+      gridEl.replaceChildren(h('div', { class: 'lib-empty lib-empty--inline' }, ic('archive', 32),
+        h('h3', {}, '还没有归档工程'), h('p', {}, '在工程卡片菜单中选择「归档」，文件、对话和版本记录都会保留。')));
+      return;
+    }
     gridEl.replaceChildren(renderEmptyState());
     return;
   }
@@ -346,7 +364,7 @@ function renderProjects() {
   }
   const frag = document.createDocumentFragment();
   list.forEach((project, index) => frag.appendChild(buildCard(project, index)));
-  if (!state.query.trim()) frag.appendChild(buildAddCard());
+  if (!state.query.trim() && state.scope !== 'archived') frag.appendChild(buildAddCard());
   gridEl.replaceChildren(frag);
   setupThumbObserver();
 }
@@ -365,22 +383,23 @@ function buildAddCard() {
 }
 
 function updateHeader(list) {
+  const scoped = projects.filter(p => (p.archived === true) === (state.scope === 'archived'));
   if (subtitleEl) {
     if (state.loading && !projects.length) subtitleEl.textContent = '正在读取工程…';
     else if (state.error && !projects.length) subtitleEl.textContent = '读取失败，' + state.error;
-    else if (!projects.length) subtitleEl.textContent = '从模板新建，或导入现成的网页';
+    else if (!scoped.length) subtitleEl.textContent = state.scope === 'archived' ? '归档的工程可随时打开或移回进行中' : '从模板新建，或导入现成的网页';
     else {
-      const latest = projects.reduce((max, p) => Math.max(max, p.updatedAt || 0), 0);
+      const latest = scoped.reduce((max, p) => Math.max(max, p.updatedAt || 0), 0);
       const q = state.query.trim();
       subtitleEl.textContent = q
-        ? `${list.length} / ${projects.length} 个工程匹配「${q}」 · 最近更新 ${formatTime(latest)}`
-        : `${projects.length} 个工程 · 最近更新 ${formatTime(latest)}`;
+        ? `${list.length} / ${scoped.length} 个工程匹配「${q}」 · 最近更新 ${formatTime(latest)}`
+        : `${scoped.length} 个${state.scope === 'archived' ? '已归档' : '进行中'}工程 · 最近更新 ${formatTime(latest)}`;
     }
   }
   if (countEl) {
     const searching = Boolean(state.query.trim());
     // 始终取本次渲染后的数组长度，避免 store 缓存与渲染不同步
-    countEl.textContent = searching ? `${list.length} / ${projects.length}` : String(list.length);
+    countEl.textContent = searching ? `${list.length} / ${scoped.length}` : String(list.length);
     countEl.classList.toggle('is-filtered', searching);
   }
 }
@@ -625,7 +644,22 @@ async function commandTarget(action, payload) {
   if (action === 'rename') return renameProject(project);
   if (action === 'delete') return removeProject(project);
   if (action === 'duplicate') return duplicateProject(project);
+  if (action === 'archive' || action === 'unarchive') return setArchived(project, action === 'archive');
   return { ok: false, error: '未知操作' };
+}
+
+async function setArchived(project, archived) {
+  closeCardMenu();
+  try {
+    const res = await ctx.api.patchProject(project.id, { archived });
+    ctx.store.update(s => { if (s.project?.id === project.id) Object.assign(s.project, res.project); });
+    await refreshProjects({ soft: true });
+    ctx.toast.ok(archived ? '已归档，可在「已归档」中恢复' : '已移回进行中');
+    return { ok: true, project: res.project };
+  } catch (err) {
+    ctx.toast.error('归档操作失败：' + (err?.message || err));
+    return { ok: false, error: err?.message };
+  }
 }
 
 function openProject(project) {
@@ -761,6 +795,7 @@ function openCardMenu(anchor, project) {
     menuItem({ label: '重命名', iconName: 'edit', onClick: () => renameProject(project) }),
     menuItem({ label: '复制', iconName: 'copy', onClick: () => duplicateProject(project) }),
     menuItem({ label: '导出 HTML', iconName: 'download', onClick: () => exportProject(project) }),
+    menuItem({ label: project.archived ? '移出归档' : '归档', iconName: 'archive', onClick: () => setArchived(project, !project.archived) }),
     h('div', { class: 'menu-sep' }),
   );
   menu.append(

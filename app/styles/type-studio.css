@@ -1,0 +1,144 @@
+/* 艺术字工坊：对话框内的画布、配色与预览样式（只作用于应用界面）
+   视觉规范沿用 design-v3：纯白/纯黑中性色、2px 锐角、界面零渐变、1px 实线描边。 */
+
+/* ---------- 弹窗外壳：去掉圆角胶囊感，与属性面板/功能区一致 ---------- */
+.wtk-studio-modal { width: min(1180px, calc(100vw - 48px)); }
+.wtk-studio-modal .modal-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+.wtk-studio-modal .modal-body { padding: 0; display: flex; flex-direction: column; min-height: 0; }
+.wtk-studio-modal .modal-foot { padding: 10px 16px; }
+.wtk-studio-modal .modal-title { font-size: 14px; letter-spacing: .2px; }
+
+.wtk-studio {
+  display: grid; grid-template-columns: 232px minmax(0, 1fr) 252px;
+  flex: 1 1 auto; height: min(74vh, 680px); min-height: 420px;
+  overflow: hidden;
+}
+.wtk-studio__rail, .wtk-studio__side {
+  overflow-y: auto; overflow-x: hidden; padding: 10px;
+  background: var(--surface-2); min-height: 0; height: 100%;
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
+}
+.wtk-studio__rail { border-right: 1px solid var(--line); }
+.wtk-studio__side {
+  border-left: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 12px;
+}
+.wtk-studio__side .author-source { font-family: var(--ui-mono) !important; }
+.wtk-studio__stage {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  overflow: hidden; background: var(--surface);
+}
+
+/* ---------- 预览：中性衬底 + 点阵，舞台本身是带边框的画板 ---------- */
+.wtk-studio__preview {
+  flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden;
+  background-color: var(--bg-deep);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--ink) 16%, transparent) 1px, transparent 1px);
+  background-size: 20px 20px;
+  background-position: 0 0;
+}
+.wtk-studio__preview .wtk { position: relative !important; }
+.wtk-studio__preview svg { display: block; }
+.wtk-studio__preview .wtk-ch { display: inline-block; }
+
+/* 底部状态条：单行、等宽数字、可省略 */
+.wtk-studio__note {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  min-height: 34px; padding: 0 12px;
+  border-top: 1px solid var(--line); background: var(--surface-2);
+  font-size: 12px; color: var(--muted);
+}
+.wtk-studio__note .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wtk-studio__note .author-error { flex: 1; }
+
+/* ---------- 左侧预设：像列表项，不是卡片 ---------- */
+.wtk-group-title {
+  font-size: 11px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 0 5px; padding: 0 2px;
+}
+.wtk-group-title:first-child { margin-top: 0; }
+.wtk-preset {
+  width: 100%; text-align: left; font-family: inherit;
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 6px 8px; margin-bottom: 1px;
+  border: 1px solid transparent; border-left: 2px solid transparent;
+  border-radius: var(--radius-s); background: transparent; cursor: pointer;
+  color: var(--ink);
+}
+.wtk-preset:hover { background: var(--surface-3); }
+.wtk-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; }
+.wtk-preset.is-active {
+  border-color: var(--line); border-left-color: var(--accent);
+  background: var(--surface);
+}
+.wtk-preset strong {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; line-height: 1.35;
+}
+.wtk-preset small { font-size: 11px; line-height: 1.5; color: var(--muted); }
+.wtk-preset em {
+  font-style: normal; font-size: 10px; line-height: 14px; padding: 0 4px;
+  color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius-s);
+  white-space: nowrap;
+}
+
+/* ---------- 右侧参数 ---------- */
+.wtk-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--ink-2); }
+.wtk-field > span { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.wtk-field > span b {
+  font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums;
+  font-family: var(--ui-mono); font-size: 11px;
+}
+.wtk-field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.wtk-row { display: flex; gap: 8px; align-items: center; }
+.wtk-row > * { min-width: 0; }
+.wtk-row .input { flex: 1; }
+
+/* 颜色：方形小块，不用胶囊 */
+.wtk-swatches { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.wtk-swatches input[type="color"] {
+  width: 28px; height: 28px; padding: 0; cursor: pointer;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-s); background: none;
+}
+.wtk-swatches input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+.wtk-swatches input[type="color"]::-webkit-color-swatch { border: none; border-radius: 0; }
+.wtk-swatches input[type="color"]:hover { border-color: var(--ink-2); }
+.wtk-chip {
+  width: 20px; height: 20px; padding: 0; cursor: pointer; font-size: 0;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-s);
+  background: var(--surface); color: transparent;
+}
+.wtk-chip:hover { border-color: var(--ink-2); }
+
+/* 分段控件：锐角 + 分隔线，与功能区一致 */
+.wtk-seg {
+  display: flex; overflow: hidden;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-s);
+}
+.wtk-seg button {
+  flex: 1; font-family: inherit; font-size: 12px; padding: 5px 4px;
+  border: 0; background: var(--surface); color: var(--ink-2); cursor: pointer;
+}
+.wtk-seg button + button { border-left: 1px solid var(--line-strong); }
+.wtk-seg button:hover { background: var(--surface-2); color: var(--ink); }
+.wtk-seg button.is-active { background: var(--ink); color: var(--surface); }
+
+.wtk-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); cursor: pointer; }
+.wtk-toggle input { accent-color: var(--accent); }
+.wtk-toggle:hover { color: var(--ink); }
+
+.wtk-studio__side .btn { width: 100%; justify-content: center; }
+.wtk-studio__side .author-hint { margin: 0; font-size: 11px; line-height: 1.6; color: var(--muted); }
+.wtk-source {
+  width: 100%; min-height: 76px; resize: vertical;
+  font-family: var(--ui-mono) !important; font-size: 11px; line-height: 1.6;
+}
+
+@media (max-width: 1120px) {
+  .wtk-studio { grid-template-columns: 200px minmax(0, 1fr); height: min(70vh, 620px); }
+  .wtk-studio__side {
+    grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line);
+    flex-direction: row; flex-wrap: wrap; height: auto;
+  }
+  .wtk-studio__side > * { flex: 1 1 200px; }
+}

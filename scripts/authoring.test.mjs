@@ -51,7 +51,7 @@ test('Custom templates preserve assets and raw state, exclude conversations, rou
   }finally{await fs.rm(root,{recursive:true,force:true});}
 });
 test('Portable decks inline mathematical CSS, fonts and local images, including raw patch markup',async()=>{
-  const files=new Map([['index.html',Buffer.from('<html><head></head><body><link rel="stylesheet" href="/app/vendor/katex/katex.min.css"><img src="assets/x.png"><svg><path fill="url(#marker)"/></svg><div style="background:url(assets/x.png)"></div></body></html>')],['project.json',Buffer.from('{"kind":"native"}')],['assets/x.png',Buffer.from('png')]]);
+  const files=new Map([['index.html',Buffer.from('<html><head></head><body><link rel="stylesheet" href="/app/vendor/katex/katex.min.css"><span class="katex">x</span><img src="assets/x.png"><svg><path fill="url(#marker)"/></svg><div style="background:url(assets/x.png)"></div></body></html>')],['project.json',Buffer.from('{"kind":"native"}')],['assets/x.png',Buffer.from('png')]]);
   const shared=async(rel)=>Buffer.from(rel.endsWith('.css')?'@font-face{src:url(fonts/KaTeX.woff2)}':'font');
   const html=await deckDocument({read:async(p)=>files.get(p),shared,portable:true});assert(html.includes('data:font/woff2;base64'));assert(html.includes('data:image/png;base64'));assert(!html.includes('href="/app/vendor'));
   assert(html.includes('fill="url(#marker)"'));assert(html.includes('style="background:url(data:image/png;base64,'));

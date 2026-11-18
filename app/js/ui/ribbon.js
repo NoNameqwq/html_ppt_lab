@@ -733,15 +733,15 @@ function renderHome(container) {
 
   const paragraphGroup = group(
     '段落',
-    row(
+    col(row(
       makeButton({ icon: 'align-left', tip: '左对齐', cmd: 'text.align', payload: { align: 'left' }, active: (s) => currentAlign(s.selection) === 'left' }),
       makeButton({ icon: 'align-center', tip: '居中对齐', cmd: 'text.align', payload: { align: 'center' }, active: (s) => currentAlign(s.selection) === 'center' }),
       makeButton({ icon: 'align-right', tip: '右对齐', cmd: 'text.align', payload: { align: 'right' }, active: (s) => currentAlign(s.selection) === 'right' }),
       makeButton({ icon: 'justify', tip: '两端对齐', cmd: 'text.align', payload: { align: 'justify' }, active: (s) => currentAlign(s.selection) === 'justify' }),
-      h('span', { class: 'rdivider' }),
+    ), row(
       makeMenuButton({ icon: 'line-height', label: '行距', tip: '行距', items: lineHeightItems }),
       makeMenuButton({ icon: 'letter-spacing', label: '字距', tip: '字符间距', items: letterSpacingItems }),
-    ),
+    )),
   );
 
   const editGroup = group(
@@ -768,7 +768,11 @@ function renderHome(container) {
     makeMenuButton({ icon: 'align-middle', label: '对齐', big: true, tip: '对齐与分布', items: alignItems, minWidth: 190 }),
   );
 
-  container.append(slideGroup, clipboardGroup, fontGroup, paragraphGroup, editGroup, arrangeGroup, buildTailGroup());
+  const presentGroup = group('放映',
+    makeButton({ icon: 'play', label: '放映', big: true, tip: '从头开始放映', cmd: 'app.present' }),
+    stack(makeButton({ icon: 'monitor', label: '从当前页', tip: '从当前页放映', cmd: 'app.presentCurrent' })),
+  );
+  container.append(slideGroup, clipboardGroup, fontGroup, paragraphGroup, editGroup, arrangeGroup, presentGroup, buildTailGroup());
 }
 
 /* ============================================================
@@ -815,8 +819,9 @@ function renderInsert(container) {
     makeButton({ icon: 'palette', label: '设计', big: true, tip: '打开设计标签', onClick: () => setActiveTab('design') }),
     makeButton({ icon: 'film', label: '切换', big: true, tip: '打开切换标签', onClick: () => setActiveTab('transitions') }),
   );
-  const knowledgeGroup=group('知识表达',makeButton({icon:'list',label:'动画目录',big:true,tip:'设计可跳转的章节目录',cmd:'insert.navigation'}),makeButton({icon:'code',label:'公式',big:true,tip:'插入 LaTeX 公式',cmd:'insert.math'}),makeButton({icon:'shapes',label:'SVG 图解',big:true,tip:'插入矢量知识图解',cmd:'insert.svg'}),makeButton({icon:'type',label:'自动字体',big:true,tip:'按内容和本机字体选择组合',cmd:'design.autoFonts'}));
-  container.append(textGroup, knowledgeGroup, mediaGroup, shapeGroup, slideGroup, designGroup, buildTailGroup());
+  const knowledgeGroup=group('知识表达',makeButton({icon:'list',label:'动画目录',big:true,tip:'设计可跳转的章节目录',cmd:'insert.navigation'}),makeButton({icon:'code',label:'公式',big:true,tip:'插入 LaTeX 公式',cmd:'insert.math'}),makeButton({icon:'shapes',label:'SVG 图解',big:true,tip:'插入矢量知识图解',cmd:'insert.svg'}),makeButton({icon:'box',label:'3D 结构',big:true,tip:'构建可旋转、缩放的三维结构',cmd:'insert.three'}),makeButton({icon:'type',label:'艺术字',big:true,tip:'花体英文 / 中文字形 / 特效 / 纹理 / 阴影 / 笔画拆解',cmd:'insert.type'}),makeButton({icon:'type',label:'自动字体',big:true,tip:'按内容和本机字体选择组合',cmd:'design.autoFonts'}));
+  const favoriteGroup=group('收藏',makeButton({icon:'star',label:'元素收藏',big:true,tip:'插入跨工程收藏的元素',cmd:'favorites.open'}),makeButton({icon:'plus',label:'收藏选中',big:true,tip:'保存选中元素及使用的素材',cmd:'favorites.save'}));
+  container.append(textGroup, knowledgeGroup, mediaGroup, shapeGroup, favoriteGroup, slideGroup, designGroup, buildTailGroup());
 }
 
 /* ============================================================

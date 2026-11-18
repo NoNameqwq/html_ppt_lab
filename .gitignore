@@ -6,6 +6,8 @@ projects/
 # 工具 / 会话缓存
 .workbuddy/
 node_modules/
+WebDeck.html
+WebDeck-*.html
 *.log
 
 # 截图与验收产物
@@ -16,3 +18,6 @@ output/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 汉字笔顺数据（由 scripts/pack-hanzi.mjs 生成，勿入库）
+app/vendor/hanzi/strokes-*.json

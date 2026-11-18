@@ -6,6 +6,7 @@
 
 import { h } from '../core/dom.js';
 import { icon } from '../ui/icons.js';
+import { editTimelineEffect } from './timeline-effect.js';
 
 const PAGE_DEFAULT = 1600;
 const EASINGS = [
@@ -72,8 +73,9 @@ function ensurePages(t) {
   const pd = Number(t.pageDuration) || PAGE_DEFAULT;
   t.pageDuration = pd;
   const names = (deck().slides || []).map((s) => s.name || '');
-  t.pages = Array.from({ length: n }, (_, i) => ({ index: i, start: i * pd, duration: pd, name: names[i] || `第 ${i + 1} 页` }));
-  t.duration = n * pd;
+  let start=0;
+  t.pages = Array.from({ length: n }, (_, i) => { const duration=Math.max(100,Number(t.pages?.[i]?.duration)||pd);const p={index:i,start,duration,name:names[i]||`第 ${i+1} 页`};start+=duration;return p; });
+  t.duration = Math.max(start,Number(t.duration)||0);
   return t;
 }
 
@@ -84,6 +86,7 @@ function normalize(t) {
   if (t.autoplay == null) t.autoplay = true;
   (t.tracks || []).forEach((tr) => {
     tr.id = tr.id || uid('tr');
+    if(tr.kind==='overlay'&&!tr.html){const kind=/data-wpx-tl\s*=\s*["']([^"']+)/.exec(tr.selector||'')?.[1];if(OVERLAY_PRESETS[kind])tr.html=OVERLAY_PRESETS[kind].html;}
     tr.keyframes = (tr.keyframes || []).map((k) => ({
       id: k.id || uid('kf'),
       t: Number(k.t) || 0,
@@ -106,9 +109,10 @@ async function rawGetTimeline() {
 async function rawPutTimeline(tl) {
   const id = projectId();
   if (!id) return;
-  await fetch('/api/projects/' + encodeURIComponent(id) + '/timeline', {
+  const res=await fetch('/api/projects/' + encodeURIComponent(id) + '/timeline', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ timeline: tl }),
   });
+  if(!res.ok)throw new Error('时间线保存失败：HTTP '+res.status);
 }
 
 async function saveTimeline(immediate) {
@@ -138,7 +142,7 @@ async function loadTimeline() {
   selectedKfId = null;
   currentTime = 0;
   playing = false;
-  try { await call('setTimeline', { timeline }); } catch { /* ignore */ }
+  try { await call('setTimeline', { timeline, silent:true }); } catch { /* ignore */ }
   await call('timelineSeek', { time: 0 }).catch(() => { });
 }
 
@@ -246,7 +250,7 @@ async function deleteTrack(id) {
   const i = (timeline.tracks || []).findIndex((t) => t.id === id);
   if (i < 0) return;
   const track = timeline.tracks[i];
-  if (String(track.selector || '').includes('data-wpx-tl=')) {
+  if (!track.html && String(track.selector || '').includes('data-wpx-tl=')) {
     await call('deleteGlobalElement', { selector: track.selector }).catch(() => { });
   }
   timeline.tracks.splice(i, 1);
@@ -260,6 +264,18 @@ async function deleteTrack(id) {
 /* ---------------- 贯穿层生成器 ---------------- */
 
 const OVERLAY_PRESETS = {
+  ripple: {
+    name:'涟漪扩散',
+    html:'<div style="position:absolute;left:50%;top:50%;width:300px;height:300px;margin:-150px;border:12px solid #a7b7ff;border-radius:50%;opacity:0;z-index:75"></div>',
+    easing:'ease-out',
+    frames:(p,end)=>[{t:p.start,props:{opacity:0,scale:.1}},{t:Math.min(end,p.start+120),props:{opacity:.9,scale:.3}},{t:Math.min(end,p.start+1100),props:{opacity:0,scale:5}}],
+  },
+  orbit: {
+    name:'星环旋转',
+    html:'<div style="position:absolute;left:50%;top:50%;width:500px;height:500px;margin:-250px;border:3px solid #c5b1ff;border-radius:50%;opacity:0;z-index:75"><svg viewBox="0 0 500 500" width="500" height="500"><circle cx="250" cy="0" r="20" fill="#c5b1ff"/><path d="M250 20V480M20 250H480" stroke="#c5b1ff" opacity=".25"/></svg></div>',
+    easing:'linear',
+    frames:(p,end)=>[{t:p.start,props:{opacity:0,scale:.6,rotate:0}},{t:Math.min(end,p.start+200),props:{opacity:.8,scale:1,rotate:60}},{t:Math.min(end,p.start+1400),props:{opacity:0,scale:1.4,rotate:360}}],
+  },
   flash: {
     name: '屏闪层',
     html: '<div data-wpx-tl="flash" style="position:absolute;inset:0;background:#fff;opacity:0;z-index:80;pointer-events:none"></div>',
@@ -316,6 +332,14 @@ const OVERLAY_PRESETS = {
 };
 
 async function addOverlay(kind) {
+  if (!timeline) await loadTimeline();
+  if(kind==='custom') {
+    const id=uid('fx');
+    const fresh={id,name:'自定义特效',kind:'overlay',selector:`[data-wpx-tl="${id}"]`,html:'<div style="position:absolute;inset:25%;background:radial-gradient(circle,#7c6cff,transparent);opacity:0"></div>',easing:'ease-out',keyframes:[{t:0,props:{opacity:0,scale:.2}},{t:600,props:{opacity:1,scale:1}},{t:1400,props:{opacity:0,scale:1.5}}]};
+    const edited=await editTimelineEffect(ctx,fresh,timeline.pages);
+    if(!edited)return;
+    timeline.tracks.push(edited);selectedTrackId=id;selectedKfId=null;await saveTimeline(true);if(!open)toggle(true);else render();return;
+  }
   const preset = OVERLAY_PRESETS[kind];
   if (!preset) return;
   const selector = `[data-wpx-tl="${kind}"]`;
@@ -327,13 +351,8 @@ async function addOverlay(kind) {
     toast('「' + preset.name + '」已经存在，已选中该轨道', 'info', 2000);
     return;
   }
-  let exists = false;
-  try { exists = !!(await call('existsSelector', { selector }))?.found; } catch { exists = false; }
-  if (!exists && !isRaw()) {
-    try { await call('insertGlobalElement', { html: preset.html }); } catch (err) { toast('创建贯穿层失败：' + (err?.message || err), 'error'); return; }
-  }
   const end = timeline.duration;
-  const track = { id: uid('tr'), name: preset.name, selector, kind: 'overlay', easing: preset.easing, syncPages: true, keyframes: [] };
+  let track = { id: uid('tr'), name: preset.name, html:preset.html, selector, kind: 'overlay', easing: preset.easing, syncPages: true, keyframes: [] };
   for (const p of timeline.pages || []) {
     preset.frames(p, end).forEach((f) => {
       if (f.t <= end) track.keyframes.push({ id: uid('kf'), t: f.t, props: { ...f.props }, page: p.index });
@@ -346,6 +365,7 @@ async function addOverlay(kind) {
     seen.add(key);
     return true;
   }).sort((a, b) => a.t - b.t);
+  if(kind==='fly') { track.content={type:'text',value:'飞入文字',color:'#e1402b',size:96,direction:'left',duration:980}; const edited=await editTimelineEffect(ctx,track,timeline.pages);if(!edited)return;track=edited; }
   timeline.tracks.push(track);
   selectedTrackId = track.id;
   selectedKfId = track.keyframes[0]?.id || null;
@@ -603,6 +623,10 @@ function renderInspector() {
       h('button', { type: 'button', class: 'btn btn--sm', onclick: () => addKeyframe() }, '加帧'),
       h('button', { type: 'button', class: 'btn btn--sm', onclick: () => pageKeyframes() }, '每页'),
       h('button', { type: 'button', class: 'btn btn--sm', onclick: () => openPageStates(track) }, '分页状态'))));
+  if(track.kind==='overlay' || track.html) box.append(h('button',{type:'button',class:'btn btn--sm tl-edit-content',onclick:async()=>{
+    const edited=await editTimelineEffect(ctx,track,timeline.pages);if(!edited)return;Object.assign(track,edited);await saveTimeline(true);render();
+  }},'编辑飞入内容 / SVG'));
+  box.append(h('button',{type:'button',class:'btn btn--sm tl-edit-content',onclick:()=>deleteTrack(track.id)},'删除轨道'));
 
   if (!kf) {
     box.append(h('div', { class: 'tl2-ins-empty' },
@@ -742,6 +766,10 @@ function buildPanel() {
     h('span', { class: 'tl2-time' }, '0.00s'),
     h('span', { class: 'tl2-page-tag' }, 'P1'),
     h('span', { class: 'tl2-grow' }),
+    h('button', { type: 'button', class: 'btn btn--sm', 'data-act':'agent', onclick:()=>{
+      const track=trackById(selectedTrackId);
+      ctx.bus.runCommand('agent.draft',{text:`请设计动画时间线${track?'，调整轨道「'+track.name+'」（id: '+track.id+'，selector: '+track.selector+'）':''}。先用 deck_get_timeline 读取现有时间线，保留其它轨道。可生成新的 HTML / SVG 特效及 CSS、关键帧，再用 deck_set_timeline 保存。\n我的要求：`});
+    }},ic('sparkles',14),'Agent'),
     h('button', { type: 'button', class: 'tl2-icon', 'data-act': 'follow', 'data-tip': '跟随分页：切页时播放头对齐到该页起点' }, ic('link', 14)),
     h('button', { type: 'button', class: 'tl2-icon', 'data-act': 'autoplay', 'data-tip': '放映时自动播放时间线' }, ic('play-circle', 14)),
     h('button', { type: 'button', class: 'btn btn--sm', 'data-act': 'addTrack' }, ic('plus', 13), h('span', {}, '轨道')),
@@ -832,7 +860,7 @@ let fxMenu = null;
 function openFxMenu(anchor) {
   if (fxMenu) { fxMenu.remove(); fxMenu = null; return; }
   const menu = h('div', { class: 'tl2-menu' });
-  [['flash', '屏闪', 'zap'], ['fly', '飞入元素', 'move'], ['sweep', '光带', 'arrow-right'], ['shutter', '快门', 'layers'], ['black', '黑场', 'moon']].forEach(([kind, label, iconName]) => {
+  [['flash', '屏闪', 'zap'], ['fly', '飞入元素…', 'move'], ['sweep', '光带', 'arrow-right'], ['shutter', '快门', 'layers'], ['black', '黑场', 'moon'],['ripple','涟漪','circle'],['orbit','星环','sparkles'],['custom','自定义 HTML / SVG…','code']].forEach(([kind, label, iconName]) => {
     const b = h('button', { type: 'button' }, ic(iconName, 14), h('span', {}, label));
     b.addEventListener('click', () => { menu.remove(); fxMenu = null; addOverlay(kind); });
     menu.append(b);
@@ -882,6 +910,7 @@ export async function init(context) {
   buildPanel();
   addToggleButton();
   ctx.bus.on('deck:ready', () => { if (open) loadTimeline().then(render).catch(() => { }); });
+  ctx.bus.on('timeline:changed',()=>{if(open)loadTimeline().then(render).catch(()=>{});});
   ctx.bus.on('deck:change', async () => {
     if (!open || !timeline || dragState) return;
     const n = pageCount();

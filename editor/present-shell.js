@@ -238,12 +238,14 @@
 
   function bind() {
     document.addEventListener('contextmenu', function (e) {
+      if(e.target.closest&&e.target.closest('[data-wds-three]'))return;
       e.preventDefault();
       e.stopPropagation();
       open(e.clientX, e.clientY);
     }, true);
 
     document.addEventListener('click', function (e) {
+      if(e.target.closest&&e.target.closest('[data-wds-three]'))return;
       var actEl = e.target && e.target.closest ? e.target.closest('[data-wpx-action]') : null;
       if (actEl) {
         var act = actEl.getAttribute('data-wpx-action');

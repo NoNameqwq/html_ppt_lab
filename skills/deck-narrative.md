@@ -3,31 +3,14 @@ id: deck-narrative
 name: 演示叙事
 desc: 叙事骨架、每页一个论点、节奏与视觉连续
 category: content
-default: false
+default: true
 ---
-# 演示叙事结构
-
-## 默认骨架（10 页）
-封面 → 背景/问题 → 洞察/矛盾 → 方案（2–3 页）→ 证据/数据 → 案例/场景 → 行动建议 → 收尾。
-不足 6 页时压缩为：封面 → 核心主张 → 2 个支撑 → 收尾。
-
-## 每页一个论点
-- 标题写成结论句（“成本下降 40%”而不是“成本分析”），正文只放支撑。
-- 一页只讲一件事；讲两件事就拆页。正文不超过 3 段或 6 条要点。
-- 信息密度交替：密页（图文/数据）后接疏页（大字/金句/过渡），形成呼吸感。
-
-## 结构技巧
-- 金字塔：先结论后论据；每页要点用「主张 → 证据 → 含义」三层。
-- 对比：左右分栏展示前后/竞品，同尺寸图片与同字号，差异点用强调色标出。
-- 数字：一页只放 1 个主角数字（160–260px），其余数字降为 40–56px 辅助。
-- 过渡页：一句金句 + 大留白，用于章节切换，切换动效统一。
-
-## 视觉连续
-- 相邻页沿用同一套边距、标题位置、页码；封面/章节页可破格但需成套。
-- 每 3–4 页换一次版式（标题页/图文/数据/引用），避免 10 页同构。
-- 切换动效匹配叙事节奏：章节用 push/wipe，内容页用 fade/zoom，收尾用 iris/dissolve；全篇 ≤ 3 种。
-
-## 检查清单
-- 把每页标题连起来读，能否讲清故事；不能就重写标题。
-- 每页是否有一个明确视觉重心；是否有页面信息超过 6 条；是否有页面没有论点。
-- 收尾页是否给出下一步（行动/问题/联系方式），而不是空喊“谢谢”。
+# Presentation narrative
+Start with the objective, audience knowledge and claim they should retain. Choose a structure for that objective; no universal ten-page sequence is mandatory.
+- Group related evidence into meaningful chapters. Every page should advance a claim, explain a relationship, show evidence or enable an action.
+- Read page titles in sequence: they should form a coherent story. Do not fabricate numbers to make claims persuasive.
+- Alternate density and scale. A proof, comparison, example and conclusion need different composition within a coherent visual language.
+- Decide whether an overview or nested directory helps. Count every navigation page in the requested total; short linear stories may need only section markers.
+- Invent navigation from the content's relationships. Original HTML/SVG/CSS is encouraged; petals, orbit and steps are optional examples, never the full design vocabulary.
+- Carry chapter identity through type, color, shape or position. Verify stable links after rearranging pages.
+- End with an appropriate conclusion, action or open question. Inspect rendered pages, not just the outline, before claiming readiness.

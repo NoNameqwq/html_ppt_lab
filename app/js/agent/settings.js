@@ -3,6 +3,14 @@
 import { h } from '../core/dom.js';
 import { icon } from '../ui/icons.js';
 import { openManager, getCachedCatalog } from './skills.js';
+import { createSearchSettingsForm } from './search-settings.js';
+import { createImageSettingsForm } from './image-settings.js';
+import { normalizeCollaboration } from './collaboration.js';
+import { createCollaborationForm } from './collaboration-settings.js';
+import { normalizeCompaction } from './compaction.js';
+import { createCompactionForm } from './compaction-settings.js';
+import { createWebDAVForm } from './webdav-settings.js';
+import { normalizeVisibleModels, providerModels } from '../core/model-visibility.js';
 
 export const PROVIDER_PRESETS = [
   {
@@ -55,6 +63,7 @@ export function normalizeProvider(raw) {
     masked: String(p.masked || ''),
     model: String(p.model || p.defaultModel || p.default_model || ''),
     models,
+    visibleModels: normalizeVisibleModels(p.visibleModels),
     wire: String(p.wire || 'openai'),
     isCustom: custom,
     keyLink: (PROVIDER_PRESETS.find((x) => x.id === id) || {}).keyLink || '',
@@ -88,6 +97,8 @@ export function readAgentSettings(ctx) {
       return raw === 65536 ? 0 : raw;
     })(),
     streaming: a.streaming !== false,
+    collaboration: normalizeCollaboration(a.collaboration),
+    compaction: normalizeCompaction(a.compaction),
   };
 }
 
@@ -187,7 +198,7 @@ export async function loadSettings(ctx, opts = {}) {
       const ui = data && typeof data.ui === 'object' && data.ui ? data.ui : {};
       const agent = data && typeof data.agent === 'object' && data.agent ? data.agent : {};
       ctx.store.update((s) => {
-        s.settings = { ...s.settings, providers, ui, agent, imageGeneration: data.imageGeneration || { enabled: false }, loaded: true, error: null };
+        s.settings = { ...s.settings, providers, ui, agent, search: data.search || {}, imageGeneration: data.imageGeneration || { enabled: false }, loaded: true, error: null };
       });
     } catch (err) {
       console.warn('[agent/settings] 读取设置失败（服务端可能未就绪）', err);
@@ -248,18 +259,53 @@ export async function openSettings(ctx, opts = {}) {
   const focus = opts.focusProvider && draft.providers.find((p) => p.id === opts.focusProvider);
   draft.activeId = (focus || draft.providers[0]).id;
   let saved = false;
+  let disposed = false;
+  const requests = new Set();
 
   const body = h('div', { class: 'ais' });
+  const sectionTabs = h('div', { class: 'ais-sections', role: 'tablist', 'aria-label': 'API 设置分类' });
+  const chatSection = h('div', { class: 'ais-section', role: 'tabpanel', id: 'ais-section-chat', 'aria-labelledby': 'ais-nav-chat' });
+  const searchForm = createSearchSettingsForm(ctx, snap.settings.search);
+  const imageForm = createImageSettingsForm(ctx, snap.settings.imageGeneration);
+  let davData,davError='';try{davData=await ctx.api.getWebDAV();}catch(e){davError='WebDAV 设置不可用：'+e.message;}
+  const davForm=createWebDAVForm(ctx,davData,davError);
+  const sections = { chat: chatSection,
+    search: h('div', { class: 'ais-section', role: 'tabpanel', id: 'ais-section-search', 'aria-labelledby': 'ais-nav-search' }, searchForm.el),
+    image: h('div', { class: 'ais-section', role: 'tabpanel', id: 'ais-section-image', 'aria-labelledby': 'ais-nav-image' }, imageForm.el),
+    backup: h('div',{class:'ais-section',role:'tabpanel',id:'ais-section-backup','aria-labelledby':'ais-nav-backup'},davForm.el) };
   const tabsEl = h('div', { class: 'ais-tabs', role: 'tablist' });
   const paneEl = h('div', { class: 'ais-pane', role: 'tabpanel' });
   const moreEl = h('details', { class: 'ais-more' });
-  body.append(tabsEl, paneEl, moreEl);
+  const collaborationForm=createCollaborationForm(()=>draft.providers,draft.more.collaboration);
+  const compactionForm = createCompactionForm(() => draft.providers, draft.more.compaction, () => resolveActive(ctx));
+  chatSection.append(h('div', { class: 'ais-section-heading' }, h('strong', {}, '选择对话模型服务'), h('p', {}, '配置服务地址与密钥，获取模型后选择默认模型。')), tabsEl, paneEl, compactionForm.el, collaborationForm.el, moreEl);
+  body.append(sectionTabs, ...Object.values(sections));
+  const nav = [];
+  function selectSection(id) {
+    for (const [key, section] of Object.entries(sections)) section.hidden = key !== id;
+    for (const button of nav) { const selected = button.dataset.section === id; button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; }
+    if (id === 'image') imageForm.activate();
+    if (id === 'backup') davForm.activate();
+  }
+  for (const [id, name, glyph] of [['chat','对话模型','message'], ['search','联网搜索','globe'], ['image','生图','image'],['backup','云端备份','cloud']]) {
+    const button = h('button', { type: 'button', role: 'tab', id: 'ais-nav-' + id, class: 'ais-section-tab', 'data-section': id, 'aria-controls': 'ais-section-' + id, onClick: () => selectSection(id) }, h('span', { html: icon(glyph, 16) }), name);
+    nav.push(button); sectionTabs.append(button);
+  }
+  sectionTabs.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft','ArrowRight','Home','End'].includes(e.key)) return;
+    e.preventDefault(); const i = nav.indexOf(document.activeElement), next = e.key === 'Home' ? 0 : e.key === 'End' ? nav.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + nav.length) % nav.length;
+    selectSection(nav[next].dataset.section); nav[next].focus();
+  });
+  selectSection(sections[opts.section] ? opts.section : 'chat');
 
   function activeProvider() {
     return draft.providers.find((p) => p.id === draft.activeId) || draft.providers[0];
   }
 
   function renderTabs() {
+    const scrollLeft = tabsEl.scrollLeft;
+    collaborationForm.refresh();
+    compactionForm.refresh();
     tabsEl.replaceChildren();
     for (const p of draft.providers) {
       const btn = h('button', {
@@ -287,12 +333,13 @@ export async function openSettings(ctx, opts = {}) {
       renderPane();
     });
     tabsEl.append(add);
+    tabsEl.scrollLeft = scrollLeft;
   }
 
   async function fetchModels(provider, pane) {
     provider.status = null;
     if (!provider.baseUrl) {
-      setProviderStatus(provider, '请先在「高级」里填写 Base URL。', 'error');
+      setProviderStatus(provider, '请先填写 Base URL。', 'error');
       renderPane();
       return;
     }
@@ -303,12 +350,14 @@ export async function openSettings(ctx, opts = {}) {
     }
     setProviderStatus(provider, '正在获取模型…', 'loading');
     renderPane();
+    const controller = new AbortController(); requests.add(controller);
     try {
       const res = await ctx.api.fetchModels({
         providerId: provider.id,
         baseUrl: provider.baseUrl,
         ...(provider.apiKey ? { apiKey: provider.apiKey } : {}),
-      });
+      }, controller.signal);
+      if (disposed) return;
       const models = Array.isArray(res && res.models) ? res.models : [];
       if (!models.length) {
         setProviderStatus(provider, '该端点没有返回模型。', 'warn');
@@ -316,74 +365,54 @@ export async function openSettings(ctx, opts = {}) {
         return;
       }
       provider.models = models;
+      collaborationForm.refresh();
+      compactionForm.refresh();
       const recommended = models.find((m) => m && m.recommended) || models[0];
       const currentOk = models.some((m) => (m.id || m.name) === provider.model);
       if (!provider.model || !currentOk) provider.model = String(recommended.id || recommended.name || '');
       setProviderStatus(provider, '已获取 ' + models.length + ' 个模型，已选 ' + provider.model, 'ok');
       renderPane();
     } catch (err) {
+      if (disposed || err.name === 'AbortError') return;
       setProviderStatus(provider, '获取失败：' + (err && err.message ? err.message : String(err)), 'error');
       renderPane();
-    }
+    } finally { requests.delete(controller); }
   }
 
-  async function testConnection(provider, pane) {
-    const model = provider.model || (provider.models[0] && (provider.models[0].id || provider.models[0].name)) || '';
-    if (!model) {
-      setProviderStatus(provider, '请先获取模型或填写模型 id。', 'error');
-      renderPane();
-      return;
-    }
-    if (!provider.apiKey && !provider.keySet) {
-      setProviderStatus(provider, '请先填写 API Key。', 'error');
-      renderPane();
-      return;
-    }
-    setProviderStatus(provider, '正在保存并测试连接…', 'loading');
-    renderPane();
+  async function testConnection(provider) {
+    if (!provider.model || !provider.baseUrl || (!provider.apiKey && !provider.keySet)) { setProviderStatus(provider, '请先填写服务地址、API Key 并选择模型。', 'error'); renderPane(); return; }
+    const controller = new AbortController(); requests.add(controller);
+    const timer = setTimeout(() => controller.abort(), 30000), start = Date.now();
+    let reply = '', error = '', finished = false;
+    setProviderStatus(provider, '正在测试当前草稿…', 'loading'); renderPane();
     try {
-      await saveDraft(true);
-    } catch (err) {
-      setProviderStatus(provider, '保存设置失败：' + (err && err.message ? err.message : String(err)), 'error');
-      renderPane();
-      return;
-    }
-    const t0 = Date.now();
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30000);
-    let reply = '';
-    let streamError = null;
-    try {
-      await ctx.api.chatStream(
-        {
-          providerId: provider.id,
-          model,
-          messages: [{ role: 'user', content: '请只回复两个字母：OK' }],
-          temperature: 0,
-          maxTokens: 24,
-        },
-        (evt) => {
-          if (!evt) return;
-          if (evt.type === 'delta' && evt.content) reply += evt.content;
-          if (evt.type === 'error') streamError = evt.message || '模型返回错误';
-        },
-        controller.signal
-      );
-      if (streamError) throw new Error(streamError);
-      setProviderStatus(provider, '连接成功 · ' + (Date.now() - t0) + 'ms' + (reply ? ' · ' + String(reply).replace(/\s+/g, ' ').slice(0, 20) : ''), 'ok');
-    } catch (err) {
-      const msg = err && err.name === 'AbortError' ? '请求超时（30s）' : (err && err.message ? err.message : String(err));
-      setProviderStatus(provider, '连接失败：' + msg, 'error');
-    } finally {
-      clearTimeout(timer);
-    }
-    renderPane();
+      await ctx.api.testChatSettings({ id: provider.id, baseUrl: provider.baseUrl, apiKey: provider.apiKey, clearKey: provider.clearKey, model: provider.model, wire: provider.wire }, (e) => {
+        if (e.type === 'delta') reply += e.content || '';
+        if (e.type === 'error') error = e.message || '模型返回错误';
+        if (e.type === 'done') finished = true;
+      }, controller.signal);
+      if (error || !finished || !reply.trim()) throw new Error(error || '模型没有返回完整回复');
+      setProviderStatus(provider, `连接成功 · ${Date.now()-start}ms · 草稿尚未保存`, 'ok');
+    } catch (e) { setProviderStatus(provider, e.name === 'AbortError' ? '测试超时（30s）' : '连接失败：' + e.message, 'error'); }
+    finally { clearTimeout(timer); requests.delete(controller); if (!disposed) renderPane(); }
   }
 
   function buildModelList(provider) {
-    const wrap = h('div', { class: 'ais-models' });
-    const models = Array.isArray(provider.models) ? provider.models : [];
+    const wrap = h('div', { class: 'ais-models-section' });
+    const models = providerModels(provider);
     if (!models.length) return null;
+    const all = h('input', { type: 'checkbox', 'aria-label': '聊天模型全选' });
+    const syncAll = () => {
+      const selected = provider.visibleModels;
+      const n = models.filter(m => selected === null || selected.includes(m.id)).length;
+      all.checked = n === models.length;
+      all.indeterminate = n > 0 && n < models.length;
+    };
+    all.addEventListener('change', () => { provider.visibleModels = all.checked ? null : []; renderPane(); });
+    wrap.append(h('div', { class: 'ais-models-toolbar' },
+      h('span', {}, '默认模型 · 聊天中显示'), h('label', { class: 'ais-model-select-all' }, all, '全选')),
+      h('p', { class: 'ais-models-hint' }, '点击卡片设置默认模型；勾选决定聊天菜单显示哪些模型。全选后自动显示新获取的模型。'));
+    const list = h('div', { class: 'ais-models' });
     for (const m of models) {
       const id = String(m.id || m.name || '');
       if (!id) continue;
@@ -405,8 +434,17 @@ export async function openSettings(ctx, opts = {}) {
         setProviderStatus(provider, '默认模型：' + id + '（保存后生效）', 'ok');
         renderPane();
       });
-      wrap.append(item);
+      const check = h('input', { type: 'checkbox', 'aria-label': '聊天中显示 ' + id });
+      check.checked = provider.visibleModels === null || provider.visibleModels.includes(id);
+      check.addEventListener('change', () => {
+        const selected = new Set(provider.visibleModels === null ? models.map(m => m.id) : provider.visibleModels);
+        if (check.checked) selected.add(id); else selected.delete(id);
+        provider.visibleModels = [...selected]; syncAll();
+      });
+      list.append(h('div', { class: 'ais-model-row' }, item,
+        h('label', { class: 'ais-model-visible', title: '在聊天模型菜单中显示' }, check, h('span', {}, '显示'))));
     }
+    syncAll(); wrap.append(list);
     return wrap;
   }
 
@@ -414,17 +452,15 @@ export async function openSettings(ctx, opts = {}) {
     const det = h('details', { class: 'ais-adv' });
     const summary = h('summary', {}, 'Provider 高级');
     const inner = h('div', { class: 'ais-adv-body' });
-    const baseInput = h('input', { class: 'input', placeholder: 'https://api.example.com/v1', value: provider.baseUrl || '' });
-    baseInput.addEventListener('input', () => { provider.baseUrl = baseInput.value.trim(); });
     const modelInput = h('input', { class: 'input', placeholder: '模型 id，如 deepseek-chat', value: provider.model || '', list: 'ais-models-' + provider.id });
     modelInput.addEventListener('input', () => { provider.model = modelInput.value.trim(); });
+    modelInput.addEventListener('change', () => { renderPane(); collaborationForm.refresh(); compactionForm.refresh(); });
     const datalist = h('datalist', { id: 'ais-models-' + provider.id });
     for (const m of provider.models || []) {
       const id = m && (m.id || m.name);
       if (id) datalist.append(h('option', { value: String(id) }));
     }
     inner.append(
-      h('label', { class: 'ais-field' }, h('span', { class: 'ais-label' }, 'Base URL'), baseInput),
       h('label', { class: 'ais-field' }, h('span', { class: 'ais-label' }, '模型 id'), modelInput, datalist)
     );
     const tools = h('div', { class: 'ais-adv-tools' });
@@ -477,13 +513,19 @@ export async function openSettings(ctx, opts = {}) {
       paneEl.append(h('div', { class: 'ais-empty' }, '还没有 Provider，点上方 + 添加。'));
       return;
     }
+    if (provider.isCustom) {
+      const name = h('input', { class: 'input', value: provider.name, maxlength: '80', 'aria-label': '供应商名称', placeholder: '例如：我的模型服务' });
+      name.addEventListener('input', () => { provider.name = name.value.trim(); renderTabs(); });
+      paneEl.append(h('label', { class: 'ais-field' }, h('span', { class: 'ais-label' }, '供应商名称'), name));
+    }
     const keyRow = h('label', { class: 'ais-field ais-field--row' });
     const keyInput = h('input', {
       class: 'input ais-key-input',
       type: 'password',
       autocomplete: 'new-password',
       placeholder: provider.keySet ? '已配置（留空不修改）' : '粘贴 API Key',
-      value: '',
+      value: provider.apiKey || '',
+      'aria-label': '对话 API Key',
     });
     keyInput.addEventListener('input', () => { provider.apiKey = keyInput.value; provider.clearKey = false; });
     keyRow.append(h('span', { class: 'ais-label' }, 'API Key'), keyInput);
@@ -499,13 +541,13 @@ export async function openSettings(ctx, opts = {}) {
     const fetchBtn = h('button', { type: 'button', class: 'btn btn--sm' });
     fetchBtn.innerHTML = icon('refresh', 13) + '<span>获取模型</span>';
     fetchBtn.addEventListener('click', () => fetchModels(provider, paneEl));
-    const testBtn = h('button', { type: 'button', class: 'btn btn--sm' });
-    testBtn.innerHTML = icon('zap', 13) + '<span>测试连接</span>';
-    testBtn.addEventListener('click', () => testConnection(provider, paneEl));
+    const testBtn = h('button', { type: 'button', class: 'btn btn--sm', onClick: () => testConnection(provider) }, '测试对话连接');
     const modelTag = h('span', { class: 'ais-model-picked ellipsis' }, provider.model ? '模型：' + provider.model : '未选择模型');
     actions.append(fetchBtn, testBtn, h('span', { class: 'grow' }), modelTag);
 
-    paneEl.append(keyRow, sub, actions);
+    const base = h('input', { class: 'input', value: provider.baseUrl || '', placeholder: 'https://api.example.com/v1', 'aria-label': '对话 Base URL' });
+    base.addEventListener('input', () => { provider.baseUrl = base.value.trim(); });
+    paneEl.append(h('label', { class: 'ais-field' }, h('span', { class: 'ais-label' }, 'Base URL'), base), keyRow, sub, actions);
     statusEl(paneEl, provider);
     const modelList = buildModelList(provider);
     if (modelList) paneEl.append(modelList);
@@ -603,6 +645,7 @@ export async function openSettings(ctx, opts = {}) {
         keyEnv: p.keyEnv,
         model: p.model,
         models: p.models || [],
+        visibleModels: normalizeVisibleModels(p.visibleModels),
       };
       if (p.isCustom) base.custom = true;
       if (p.apiKey) base.apiKey = p.apiKey;
@@ -616,11 +659,16 @@ export async function openSettings(ctx, opts = {}) {
         contextLimit: draft.more.contextLimit,
         maxTokens: draft.more.maxTokens,
         streaming: draft.more.streaming,
+        collaboration:collaborationForm.getValue(),
+        compaction: compactionForm.getValue(),
       },
       ui: { ...((ctx.store.get().settings && ctx.store.get().settings.ui) || {}) },
     };
     if (Array.isArray(draft.removed) && draft.removed.length) payload.removeProviders = draft.removed.slice();
-    await ctx.api.putSettings(payload);
+    payload.search = searchForm.getPatch();
+    payload.imageGeneration = imageForm.getPatch();
+    await ctx.api.putUserSettings(payload);
+    await davForm.save();
     for (const p of draft.providers) {
       if (p.apiKey) { p.keySet = true; p.keySource = 'settings'; }
       if (p.clearKey) { p.keySet = false; p.keySource = null; p.masked = ''; p.clearKey = false; }
@@ -642,9 +690,10 @@ export async function openSettings(ctx, opts = {}) {
   renderPane();
   renderMore();
 
+  let saving = false;
   const result = await ctx.dialog.open({
-    title: 'AI 设置',
-    sub: serverOk ? '' : '设置接口未就绪，保存可能失败',
+    title: 'API 设置',
+    sub: serverOk ? '模型、搜索、生图与云端备份，统一管理' : '设置接口未就绪，保存可能失败',
     width: 'lg',
     className: 'ais-dialog',
     body,
@@ -654,18 +703,21 @@ export async function openSettings(ctx, opts = {}) {
         label: '保存',
         kind: 'primary',
         onClick: async () => {
+          if (saving) return false;
+          saving = true;
           try {
             await saveDraft(false);
-            ctx.toast.ok('AI 设置已保存');
+            ctx.toast.ok('API 设置已保存');
             return true;
           } catch (err) {
             console.error('[agent/settings] 保存失败', err);
             ctx.toast.error('保存失败：' + (err && err.message ? err.message : String(err)));
             return false;
-          }
+          } finally { saving = false; }
         },
       },
     ],
+    onClose: () => { disposed = true; for (const controller of requests) controller.abort(); imageForm.dispose(); davForm.dispose(); },
   });
   return result === true && saved;
 }

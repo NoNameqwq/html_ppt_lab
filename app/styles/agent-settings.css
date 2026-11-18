@@ -1,4 +1,24 @@
 /* Model and skill configuration dialogs, independent of conversation UI. */
+.ais-dialog { max-width:min(720px,calc(100vw - 24px)); }
+.ais-sections { display:flex; gap:6px; padding:4px; background:var(--surface-2); border:1px solid var(--line); border-radius:11px; }
+.ais-section-tab { display:flex; align-items:center; justify-content:center; gap:7px; flex:1; min-width:0; padding:10px 8px; border:0; border-radius:8px; background:transparent; color:var(--ink-2); font:inherit; font-size:13px; cursor:pointer; transition:background .16s,color .16s,box-shadow .16s; }
+.ais-section-tab > span { display:flex; }
+.ais-section-tab[aria-selected="true"] { color:var(--ink); background:var(--surface); box-shadow:0 1px 5px #00000012; }
+.ais-section-tab:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.ais-section { min-height:330px; animation:ais-section-in .18s ease-out; }
+.ais-section[hidden] { display:none; }
+.ais-section-heading { padding:14px 0 8px; }
+.ais-section-heading strong { font-size:15px; font-weight:550; }
+.ais-section-heading p { margin:7px 0; color:var(--ink-2); font-size:12px; line-height:1.65; }
+.ais-service-form { display:flex; flex-direction:column; gap:12px; }
+.ais-service-form .ais-subline { padding-left:0; overflow-wrap:anywhere; }
+.ais-service-form .input { width:100%; min-width:0; }
+.ais-dialog .ais-status:empty { display:none; }
+.ais-dialog .image-settings-switch { padding:13px; border:1px solid var(--line); border-radius:10px; background:var(--surface-2); }
+.ais-dialog .image-settings-switch small { line-height:1.6; }
+@keyframes ais-section-in { from { opacity:.4; transform:translateY(3px); } to { opacity:1; transform:none; } }
+@media(max-width:480px) { .ais-section-tab { font-size:12px; gap:5px; padding:10px 4px; } .ais-field--row { flex-direction:column !important; align-items:stretch !important; } .ais-pane .ais-subline { padding-left:0; } }
+@media(prefers-reduced-motion:reduce) { .ais-section { animation:none; } .ais-section-tab { transition:none; } }
 /* ---------- 技能管理弹窗（ask-*，设置高级区入口） ---------- */
 .ask {
   display: flex;
@@ -135,6 +155,14 @@
 }
 
 .ais-tab-add:hover { color: var(--ink); }
+
+.ais-models-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; color:var(--ink-2); }
+.ais-model-select-all,.ais-model-visible { display:flex; align-items:center; gap:6px; cursor:pointer; white-space:nowrap; }
+.ais-models-hint { font-size:11.5px; color:var(--muted); line-height:1.5; margin:5px 0 8px; }
+.ais-model-row { display:flex; align-items:stretch; gap:8px; min-width:0; }
+.ais-model-row .ais-model { flex:1; min-width:0; }
+.ais-model-visible { font-size:12px; color:var(--muted); padding:0 4px; }
+.ais-model-visible input,.ais-model-select-all input { accent-color:var(--accent); width:15px; height:15px; flex:none; }
 
 .ais-pane {
   min-height: 210px;
@@ -437,3 +465,29 @@
 .ais-dialog .modal-body {
   padding-top: 6px;
 }
+ .ais-collaboration,.ais-compaction{margin:16px 0;padding:16px;border:1px solid var(--line);border-radius:10px}
+ .ais-collaboration>p,.ais-compaction>p{margin:8px 0 14px;font-size:12px;line-height:1.7;color:var(--muted)}
+ .ais-role{padding:12px 0;border-top:1px solid var(--line)}
+ .ais-role b{font-size:13px}.ais-role p{margin:4px 0 9px;font-size:12px;color:var(--muted)}
+ .ais-role-inputs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:8px}
+ @media(max-width:560px){.ais-role-inputs{grid-template-columns:1fr}}
+
+/* WebDAV mounts and workspace backup history. */
+.dav-grid {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;}
+.dav-grid .ais-field {min-width:0;}
+.ais-field.dav-switch {display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:16px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2);min-height:46px;}
+.dav-switch .ais-label {margin:0;text-align:left;}
+.dav-switch input {width:17px!important;min-height:17px;height:17px;margin:0;padding:0;flex-shrink:0;accent-color:var(--accent);}
+.dav-actions,.dav-backup-actions {display:flex;flex-wrap:wrap;gap:8px;}
+.dav-status {display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:14px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);font-size:12px;line-height:1.6;overflow-wrap:anywhere;}
+.dav-status strong {font-weight:550;}
+.dav-status small,.dav-backup small {color:var(--ink-2);}
+.dav-status.is-error {color:var(--danger,#c43e1c);}
+.dav-backups {display:grid;gap:10px;}
+.dav-backup {display:flex;gap:12px;justify-content:space-between;padding:14px;border:1px solid var(--line);border-radius:10px;align-items:center;}
+.dav-backup>div:first-child {display:grid;gap:5px;min-width:0;font-size:12px;}
+.dav-backup code {font-size:10px;overflow-wrap:anywhere;color:var(--muted);}
+.dav-backup-actions {flex-shrink:0;}
+.dav-restore-shield {position:fixed;inset:0;z-index:100000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;background:var(--surface,#fff);color:var(--ink,#222);text-align:center;}
+.dav-restore-shield p {font-size:13px;line-height:1.8;max-width:560px;}
+@media(max-width:480px){.dav-grid {grid-template-columns:minmax(0,1fr);}.dav-backup {align-items:stretch;flex-direction:column;}.ais-section-tab {flex-direction:column;gap:5px;}}

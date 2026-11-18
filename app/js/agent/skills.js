@@ -6,11 +6,12 @@ import { icon } from '../ui/icons.js';
 /* 服务端不可用时的兜底目录（正文为空，只保证 UI 可用） */
 export const FALLBACK_SKILLS = [
   { id: 'motion-design', name: '动效设计', desc: '缓动、时长、节奏与多元素编排原则', category: 'design', default: true },
-  { id: 'layout-typography', name: '版式与字体层级', desc: '网格、字号层级、留白与对齐规范', category: 'design', default: true },
+  { id: 'layout-typography', name: '版式与字体层级', desc: '网格、字号层级、留白与对齐规范', category: 'design', default: false },
   { id: 'color-system', name: '配色与主题', desc: '主题变量、60-30-10、对比度与派色技巧', category: 'design', default: false },
-  { id: 'deck-narrative', name: '演示叙事', desc: '叙事骨架、每页一个论点、节奏与视觉连续', category: 'content', default: false },
+  { id: 'deck-narrative', name: '演示叙事', desc: '叙事骨架、每页一个论点、节奏与视觉连续', category: 'content', default: true },
   { id: 'html-deck-craft', name: 'Deck 代码规范', desc: '本 deck 格式的 HTML/CSS/JS 编辑规范与禁忌', category: 'code', default: true },
   { id: 'image-treatment', name: '图片处理', desc: '裁切、蒙版、构图与图片排版技巧', category: 'design', default: false },
+  { id:'svg-illustration',name:'SVG 精细图解',desc:'精确构图、部件细节、科学标注、并行绘制与放大验收',category:'code',default:false },
 ];
 
 const CATEGORY_LABEL = { design: '设计', content: '内容', code: '代码', other: '其它' };
@@ -78,6 +79,16 @@ export function defaultSkillIds(catalog) {
   return list.filter((s) => s.default).map((s) => s.id);
 }
 
+export function initialSkillIds(catalog, saved = {}) {
+  const ids = normalizeEnabledIds(catalog, saved.skills);
+  if (saved.skillsCustomized || saved.skillsPolicy === 2) return ids;
+  const legacy = ['html-deck-craft', 'layout-typography', 'motion-design'];
+  const expanded = [...legacy, 'frontend-slides-layout', 'pptx-visual-composition', 'structured-navigation'];
+  const same = (list) => ids.length === list.length && list.every((id) => ids.includes(id));
+  if (saved.updatedAt === 0 || (!saved.messages?.length && !ids.length) || !Array.isArray(saved.skills) || same(legacy) || same(expanded)) return defaultSkillIds(catalog);
+  return ids;
+}
+
 /** 过滤出合法且存在的技能 id */
 export function normalizeEnabledIds(catalog, ids) {
   const list = Array.isArray(catalog) && catalog.length ? catalog : getCachedCatalog();
@@ -99,7 +110,7 @@ export function getEnabledContent(catalog, ids) {
     if (!enabled.has(s.id)) continue;
     const content = String(s.content || '').trim();
     if (!content) continue;
-    parts.push('### ' + s.name + '（' + s.id + '）\n' + content);
+    parts.push('### ' + s.id + '\n' + content);
   }
   return parts.join('\n\n');
 }

@@ -71,7 +71,9 @@ body.wpx-mode-thumb .wpx-hud{display:none}
 body.wpx-mode-thumb #wpx-stage{transition:none}
 
 /* ---------- 编辑态：CSS 动画直接到终态（bridge 会加 wpx-editing） ---------- */
-body.wpx-editing *{
+/* 艺术字作品除外：它们的动画是作品本身的一部分，编辑时要按真实节奏播放，
+   所以这里既不冻结它们，也不追加任何覆盖，让元素自带的 animation 生效。 */
+body.wpx-editing *:not([data-wds-type]):not([data-wds-type] *){
   animation-duration:.001s!important;
   animation-delay:0s!important;
   animation-iteration-count:1!important;

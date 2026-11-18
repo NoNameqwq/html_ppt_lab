@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { captureVersion, inspectVersion, listVersions, restoreVersion, recoverVersionTransaction, withProjectLock } from '../server/version-store.mjs';
 import { readChat, saveChat, listChats } from '../server/chat-store.mjs';
 
@@ -114,4 +116,173 @@ test('Project operations serialize and the queue survives a failed request', () 
   const first = withProjectLock(dir, async () => { order.push(1); await new Promise((r) => setTimeout(r, 15)); order.push(2); throw new Error('expected'); });
   const second = withProjectLock(dir, async () => { order.push(3); return 'done'; });
   await assert.rejects(() => first, /expected/); assert.equal(await second, 'done'); assert.deepEqual(order, [1, 2, 3]);
+}));
+
+const denied = (code = 'EPERM') => Object.assign(new Error('simulated file sharing violation'), { code });
+const transactionSource = (file, phase) => String(file).split(path.sep).includes(phase) && String(file).includes(path.sep + 'transactions' + path.sep);
+
+test('Restore never renames asset directories or rewrites unchanged locked assets', t => fixture(async ({ dir, put, get }) => {
+  await put('assets/locked.bin', 'unchanged asset');
+  const version = await captureVersion(dir), asset = path.join(dir, 'assets/locked.bin');
+  const originalStat = await fs.stat(asset);
+  await put('index.html', 'current source');
+  const rename = fs.rename.bind(fs), copy = fs.copyFile.bind(fs), unlink = fs.unlink.bind(fs);
+  let directoryRenames = 0;
+  t.mock.method(fs, 'rename', async (source, target) => {
+    if (source === path.join(dir, 'assets')) { directoryRenames++; throw denied(); }
+    if (source === asset || target === asset) throw denied();
+    return rename(source, target);
+  });
+  t.mock.method(fs, 'copyFile', async (source, target) => { if (target === asset) throw denied(); return copy(source, target); });
+  t.mock.method(fs, 'unlink', async target => { if (target === asset) throw denied(); return unlink(target); });
+  await restoreVersion(dir, version.id);
+  assert.equal(directoryRenames, 0);
+  assert.equal(await get('index.html'), '<html>原始页面</html>');
+  assert.equal(await get('assets/locked.bin'), 'unchanged asset');
+  assert.equal((await fs.stat(asset)).mtimeMs, originalStat.mtimeMs);
+}));
+
+test('Transient file sharing violations retry before installing a changed file', t => fixture(async ({ dir, put, get }) => {
+  const version = await captureVersion(dir); await put('index.html', 'current');
+  const rename = fs.rename.bind(fs); let attempts = 0;
+  t.mock.method(fs, 'rename', async (source, target) => {
+    if (transactionSource(source, 'next') && target === path.join(dir, 'index.html') && ++attempts < 3) throw denied('EBUSY');
+    return rename(source, target);
+  });
+  await restoreVersion(dir, version.id);
+  assert.equal(attempts, 3); assert.equal(await get('index.html'), '<html>原始页面</html>');
+}));
+
+test('Files denying rename but permitting writes restore through verified copying', t => fixture(async ({ dir, put, get }) => {
+  await put('assets/image.bin', 'old bytes'); const version = await captureVersion(dir);
+  await put('assets/image.bin', 'new bytes');
+  const rename = fs.rename.bind(fs), copy = fs.copyFile.bind(fs); let copies = 0;
+  t.mock.method(fs, 'rename', async (source, target) => {
+    if (transactionSource(source, 'next') && target === path.join(dir, 'assets/image.bin')) throw denied();
+    return rename(source, target);
+  });
+  t.mock.method(fs, 'copyFile', async (source, target) => { copies++; return copy(source, target); });
+  await restoreVersion(dir, version.id);
+  assert.equal(copies, 1); assert.equal(await get('assets/image.bin'), 'old bytes');
+  await assert.rejects(() => get('.versions/transaction.json'), { code: 'ENOENT' });
+}));
+
+test('A late write failure restores all earlier writes and keeps future conversation in its backup branch', t => fixture(async ({ dir, put, get }) => {
+  await put('assets/image.bin', 'old asset');
+  const past = { messages: [{ role: 'user', content: 'past' }] };
+  const version = await captureVersion(dir, { conversation: { projectId: 'test', sessionId: 'default' }, chat: past });
+  await put('assets/image.bin', 'future asset'); await put('index.html', 'future page'); await put('new/notes.txt', 'future notes');
+  const future = { messages: [{ role: 'user', content: 'future' }] }; await saveChat(dir, 'default', future);
+  const rename = fs.rename.bind(fs), copy = fs.copyFile.bind(fs); let installedAssets = 0;
+  t.mock.method(fs, 'rename', async (source, target) => {
+    if (transactionSource(source, 'next') && target === path.join(dir, 'index.html')) throw denied();
+    if (transactionSource(source, 'next') && target === path.join(dir, 'assets/image.bin')) installedAssets++;
+    return rename(source, target);
+  });
+  t.mock.method(fs, 'copyFile', async (source, target) => {
+    if (transactionSource(source, 'next') && target === path.join(dir, 'index.html')) throw denied();
+    return copy(source, target);
+  });
+  await assert.rejects(() => restoreVersion(dir, version.id, { rewindConversation: true }), e => e.status === 409 && /已恢复回退前的完整工程/.test(e.message));
+  assert.equal(installedAssets, 1); assert.equal(await get('assets/image.bin'), 'future asset');
+  assert.equal(await get('index.html'), 'future page'); assert.equal(await get('new/notes.txt'), 'future notes');
+  assert.deepEqual((await readChat(dir)).messages, future.messages);
+  const backup = (await listVersions(dir)).find(v => v.kind === 'backup'); assert(backup?.hasConversation);
+  const branch = (await listChats(dir)).chats.find(c => c.id.startsWith('branch-')); assert(branch);
+  assert.deepEqual((await readChat(dir, branch.id)).messages, future.messages);
+  await assert.rejects(() => get('.versions/transaction.json'), { code: 'ENOENT' });
+}));
+
+test('Blocked rollback retains its durable journal and can be recovered repeatedly after releasing the lock', t => fixture(async ({ dir, put, get }) => {
+  await put('assets/image.bin', 'old asset'); const version = await captureVersion(dir);
+  await put('assets/image.bin', 'future asset'); await put('index.html', 'future page');
+  const rename = fs.rename.bind(fs), copy = fs.copyFile.bind(fs); let locked = true;
+  const blocks = (source, target) => locked && ((transactionSource(source, 'next') && target === path.join(dir, 'index.html'))
+    || (transactionSource(source, 'rollback') && target === path.join(dir, 'assets/image.bin')));
+  t.mock.method(fs, 'rename', async (source, target) => { if (blocks(source, target)) throw denied(); return rename(source, target); });
+  t.mock.method(fs, 'copyFile', async (source, target) => { if (blocks(source, target)) throw denied(); return copy(source, target); });
+  await assert.rejects(() => restoreVersion(dir, version.id), e => e.status === 409 && /恢复日志已保留/.test(e.message));
+  const journal = JSON.parse(await get('.versions/transaction.json')); assert.equal(journal.schema, 2);
+  assert.equal(await get('assets/image.bin'), 'old asset');
+  locked = false; await recoverVersionTransaction(dir); await recoverVersionTransaction(dir);
+  assert.equal(await get('assets/image.bin'), 'future asset'); assert.equal(await get('index.html'), 'future page');
+  await assert.rejects(() => get('.versions/transaction.json'), { code: 'ENOENT' });
+}));
+
+test('Interrupted file reconciliation recovers directory type changes, deleted files and empty directories', () => fixture(async ({ dir, put, get }) => {
+  await put('assets/image.bin', 'before image'); await put('document', 'before file');
+  await fs.mkdir(path.join(dir, 'empty'));
+  const version = await captureVersion(dir), baseline = JSON.parse(await get('.versions/manifests/' + version.id + '.json'));
+  await fs.rm(path.join(dir, 'assets'), { recursive: true }); await put('assets', 'incomplete file');
+  await fs.unlink(path.join(dir, 'document')); await put('document/nested.txt', 'incomplete directory');
+  await put('new/deep.txt', 'uncommitted'); await put('index.html', 'incomplete page'); await fs.rmdir(path.join(dir, 'empty'));
+  const before = Object.fromEntries(Object.entries(baseline.files).filter(([rel]) => rel !== 'project.json'));
+  await put('.versions/transaction.json', JSON.stringify({ schema: 2, id: 'v-mock-123456abcdef', before,
+    paths: [...Object.keys(before), 'assets', 'document/nested.txt', 'new/deep.txt'], beforeDirectories: ['assets', 'empty'], afterDirectories: ['document', 'new'] }));
+  await recoverVersionTransaction(dir); await recoverVersionTransaction(dir);
+  assert.equal(await get('assets/image.bin'), 'before image'); assert.equal(await get('document'), 'before file');
+  assert.equal(await get('index.html'), '<html>原始页面</html>'); assert((await fs.stat(path.join(dir, 'empty'))).isDirectory());
+  await assert.rejects(() => get('new/deep.txt'), { code: 'ENOENT' });
+}));
+
+test('Legacy recovery restores moved assets in place, including nested private-looking names', t => fixture(async ({ dir, put, get }) => {
+  const id = 'v-mock-123456abcdef';
+  await put('.versions/transactions/' + id + '/old/assets/image.bin', 'before image');
+  await put('.versions/transactions/' + id + '/old/assets/.chat.json', 'ordinary nested asset');
+  await put('.versions/transactions/' + id + '/old/assets/.git/data', 'ordinary nested data');
+  await put('assets/image.bin', 'incomplete image'); await put('assets/new.txt', 'uncommitted');
+  await put('.versions/transaction.json', JSON.stringify({ id, names: ['assets', 'index.html', 'project.json'], original: ['assets', 'index.html', 'project.json'] }));
+  const rename = fs.rename.bind(fs);
+  t.mock.method(fs, 'rename', async (source, target) => {
+    if ((await fs.lstat(source)).isDirectory()) throw denied();
+    return rename(source, target);
+  });
+  await recoverVersionTransaction(dir);
+  assert.equal(await get('assets/image.bin'), 'before image'); assert.equal(await get('assets/.chat.json'), 'ordinary nested asset');
+  assert.equal(await get('assets/.git/data'), 'ordinary nested data'); await assert.rejects(() => get('assets/new.txt'), { code: 'ENOENT' });
+}));
+
+test('Invalid transaction paths and conflicting rollback structures fail before live writes', () => fixture(async ({ dir, put, get }) => {
+  const version = await captureVersion(dir), baseline = JSON.parse(await get('.versions/manifests/' + version.id + '.json'));
+  await put('index.html', 'keep current');
+  const base = { schema: 2, id: 'v-mock-123456abcdef', before: { 'index.html': baseline.files['index.html'] }, paths: ['index.html'], beforeDirectories: [], afterDirectories: [] };
+  for (const patch of [{ paths: ['index.html', '../outside'] }, { beforeDirectories: ['index.html'] }, { afterDirectories: ['new/deep'] }]) {
+    await put('.versions/transaction.json', JSON.stringify({ ...base, ...patch }));
+    await assert.rejects(() => recoverVersionTransaction(dir), /路径无效|结构冲突/);
+    assert.equal(await get('index.html'), 'keep current');
+  }
+}));
+
+test('Legacy HTML-only transaction recovery accepts unrelated roots in the original list', () => fixture(async ({ dir, put, get }) => {
+  const id = 'v-mock-123456abcdef';
+  await put('.versions/transactions/' + id + '/old/index.html', 'before page');
+  await put('index.html', 'uncommitted page'); await put('assets/image.bin', 'unchanged image');
+  await put('.versions/transaction.json', JSON.stringify({ id, names: ['index.html'], original: ['index.html', 'project.json', 'assets'] }));
+  await recoverVersionTransaction(dir);
+  assert.equal(await get('index.html'), 'before page'); assert.equal(await get('assets/image.bin'), 'unchanged image');
+  assert.equal(JSON.parse(await get('project.json')).name, '初始工程');
+}));
+
+test('Windows handles denying delete sharing allow unchanged and writable asset restores', { skip: process.platform !== 'win32', timeout: 20000 }, () => fixture(async ({ dir, put, get }) => {
+  await put('assets/image.bin', 'before image'); const version = await captureVersion(dir);
+  await put('assets/image.bin', 'future image'); await put('index.html', 'future page');
+  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    '$file=[IO.File]::Open($env:WDS_LOCK_ASSET,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite); try { [Console]::WriteLine("ready"); [Console]::ReadLine() | Out-Null } finally { $file.Dispose() }'],
+    { windowsHide: true, env: { ...process.env, WDS_LOCK_ASSET: path.join(dir, 'assets/image.bin') }, stdio: ['pipe', 'pipe', 'pipe'] });
+  let timeout;
+  try {
+    await Promise.race([once(child.stdout, 'data').then(([data]) => assert.match(data.toString(), /ready/)),
+      once(child, 'exit').then(([code]) => { throw new Error('Lock helper exited early: ' + code); }),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Lock helper did not become ready')), 10000); })]);
+    clearTimeout(timeout);
+    await assert.rejects(() => fs.rename(path.join(dir, 'assets'), path.join(dir, 'moved-assets')), e => ['EPERM', 'EACCES', 'EBUSY'].includes(e.code));
+    await restoreVersion(dir, version.id);
+    assert.equal(await get('assets/image.bin'), 'before image'); assert.equal(await get('index.html'), '<html>原始页面</html>');
+    // A second restore leaves the still-open, unchanged asset alone.
+    await put('index.html', 'future again'); await restoreVersion(dir, version.id);
+    assert.equal(await get('assets/image.bin'), 'before image');
+  } finally {
+    clearTimeout(timeout); const exited = once(child, 'exit'); child.stdin.end('\n');
+    if (child.exitCode === null) await exited;
+  }
 }));

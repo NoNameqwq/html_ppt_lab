@@ -203,6 +203,12 @@ function buildLayoutGroup(body) {
       iconActionBtn('send-back', '置于底层', () => bus.runCommand('arrange.back'))),
     buildLockRow(),
   );
+  refs.absoluteW=numberInput({min:1,title:'整体宽度（像素，包含内部文字与图形）',onChange:()=>applyAbsoluteSize('w')});
+  refs.absoluteH=numberInput({min:1,title:'整体高度（像素，包含内部文字与图形）',onChange:()=>applyAbsoluteSize('h')});
+  refs.absoluteW.setAttribute('aria-label','HTML 整体宽度');refs.absoluteH.setAttribute('aria-label','HTML 整体高度');
+  refs.absoluteLock=h('input',{type:'checkbox',checked:true,'aria-label':'整体大小锁定比例'});
+  refs.absoluteBox=h('div',{class:'insp-absolute-size'},h('div',{class:'insp-sub-label'},'整体绝对大小 · px'),row(field('宽',refs.absoluteW),field('高',refs.absoluteH)),h('label',{class:'insp-hint'},refs.absoluteLock,' 保持宽高比例'),h('div',{class:'insp-hint'},'文字、SVG 和内部图形一起缩放，原有布局宽高保留。'));
+  body.append(refs.absoluteBox);
 }
 
 function buildLockRow() {
@@ -386,6 +392,8 @@ function updateLayout(selection) {
   setValue(refs.y, Math.round(rect.y));
   setValue(refs.w, Math.round(rect.w));
   setValue(refs.h, Math.round(rect.h));
+  setValue(refs.absoluteW,Math.round(rect.w));setValue(refs.absoluteH,Math.round(rect.h));
+  refs.absoluteBox.classList.toggle('is-hidden',!['html','shape'].includes(selection.type));
   setValue(refs.rotate, Math.round(Number(selection.rotate) || 0));
   const opacity = Math.round(clamp(Number(selection.opacity ?? 1), 0, 1) * 100);
   setValue(refs.opacityNum, opacity);
@@ -516,6 +524,15 @@ async function applyRect() {
   } catch (err) {
     toast.error('调整位置/尺寸失败：' + (err?.message || err));
   }
+}
+
+async function applyAbsoluteSize(axis) {
+  const sel=current(),bridge=getBridge();if(!sel?.elementId||!bridge?.ready)return;
+  const input=axis==='w'?refs.absoluteW:refs.absoluteH;
+  const value=Number(input.value);if(!Number.isFinite(value)||value<=0)return;
+  const params={elementId:sel.elementId,keepRatio:refs.absoluteLock.checked,[axis]:value};
+  if(!params.keepRatio){params.w=Number(refs.absoluteW.value);params.h=Number(refs.absoluteH.value);}
+  try {await bridge.call('setAbsoluteSize',params);}catch(e){toast.error('整体大小修改失败：'+e.message);}
 }
 
 async function applyRotate() {

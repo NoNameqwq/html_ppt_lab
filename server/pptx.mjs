@@ -1,5 +1,4 @@
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { XMLParser } from 'fast-xml-parser';
 import { openArchive } from './archive.mjs';
 
@@ -64,7 +63,7 @@ export async function convertPptx(bytes,{name='PowerPoint 演示'}={}) {
   async function image(file) {
     const entry=zip.file(file);if(!entry)return null;
     const ext=path.posix.extname(file).toLowerCase();if(!['.png','.jpg','.jpeg','.gif','.svg','.webp','.bmp'].includes(ext)){warnings.add('部分图片格式（如 EMF/WMF）不能在浏览器直接显示，请使用“外观优先”导入。');return null;}
-    const data=await entry.async('nodebuffer'),rel='assets/ppt-'+crypto.createHash('sha256').update(data).digest('hex').slice(0,18)+ext;assets.set(rel,data);return rel;
+    const data=await entry.async('uint8array'),hash=new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256',data)),rel='assets/ppt-'+Array.from(hash,(b)=>b.toString(16).padStart(2,'0')).join('').slice(0,18)+ext;assets.set(rel,data);return rel;
   }
   function transform(shape,inherited,map) {
     const sp=child(shape,'spPr')||child(shape,'grpSpPr'),xfrm=child(sp,'xfrm')||child(shape,'xfrm')||child(child(inherited,'spPr'),'xfrm');

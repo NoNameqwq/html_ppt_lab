@@ -3,37 +3,15 @@ id: frontend-slides-layout
 name: 网页演示排版与密度
 desc: 从 Frontend Slides 整理的固定舞台、讲读密度、视觉母题与交付检查
 category: design
-default: true
+default: false
 source: https://github.com/zarazhangrui/frontend-slides
 license: MIT
 ---
-# 网页演示排版
-
-依据 Zara Zhang 的 Frontend Slides 整理、改写并适配 WebDeck。上游来源为 https://github.com/zarazhangrui/frontend-slides/blob/main/SKILL.md ，许可见 skills/licenses/frontend-slides-MIT.txt。本技能不导入上游的部署、问答流程或运行时代码。
-
-## 先组织整套
-
-1. 确定受众、目的、结论与讲解路径，从已有用户需求判断，不重复询问已有信息。
-2. 先选择一套视觉语言：字体组合、主背景、强调色、形状母题、进入动画；整套保持一致。
-3. 按章节组织页面，目录、章节内容、总结使用相同颜色和符号；每页标题表达结论。
-4. 若用户给图片，先确认图片能说明什么，再设计图文关系，避免排完内容后硬塞图片。
-
-## 固定舞台与内容密度
-
-- 使用本项目 1920×1080 舞台，整页等比缩放；不要为手机重排演示内容。
-- 演讲型：每页一个观点、1–3 个要点，大字号和清楚的视觉焦点。
-- 阅读型：允许 4–6 组信息、表格与注释，但用网格、分组和留白体现层级。
-- 内容过多时先重组和精简，不把文字缩到无法阅读；页数由用户固定时重新分配每页内容预算。
-- 禁止滚动正文、溢出、无意义遮挡。标题、正文和注释最多三层；长中文标题按实际字数预留换行。
-
-## 设计与运动
-
-- 不要所有页都用相同的卡片、紫色渐变和居中标题；从内容选择对照、流程、数据、引言或整幅图。
-- 字体优先调用 fonts_list / deck_auto_fonts 选择本机可用的中文、拉丁字体组合；公式保留数学字体。
-- 图片使用 object-fit 与明确裁切区域；插画与背景可使用生图工具，但仅在用户已手动开启时调用。
-- 让一个重要的进入过程有节奏地展开，比每处都持续晃动更清楚；错峰约 80–120ms。
-- 动画表达结构关系，目录图形可延续为章节中的视觉锚点；始终支持减少动态效果设置。
-
-## 页面交付检查
-
-确认总页数和目录目标，检查正文是否完整、对齐与对比度是否清楚。公式必须在页面上真实排版，SVG 图解应有标注。放映时目录能点击进入目标章节，返回后可再次展开；保存和导出后仍保留显示与交互。
+# Web presentation composition
+Adapted from Zara Zhang's Frontend Slides: https://github.com/zarazhangrui/frontend-slides/blob/main/SKILL.md . MIT license retained in skills/licenses/frontend-slides-MIT.txt. This adaptation targets WebDeck's editable HTML stage and does not import upstream deployment workflows.
+- Design for the content and audience. Establish type, spacing, palette and motion before expanding to the deck.
+- Treat a fixed stage as a composition, not a scrolling site. Avoid clipped text and oversized cards; vary hierarchy across evidence, comparison, explanation and conclusion.
+- Choose available fonts, meaningful visual anchors, deliberate negative space and readable captions. Use editable SVG and LaTeX for relationships and formulas.
+- Invent chapter navigation when useful; derive its form from the content instead of restricting it to presets.
+- Inspect actual rendered PNGs for hierarchy, wrapping, crops and contrast. Read element bounds, change specific coordinates/styles, and recapture.
+- Verify navigation and motion separately; support reduced-motion and preserve offline assets and editable structure.

@@ -13,6 +13,7 @@ export async function readChat(dir, session) {
 export async function saveChat(dir, session, body) {
   const target = chatPath(dir, session);
   const data = { messages: Array.isArray(body.messages) ? body.messages : [], skills: Array.isArray(body.skills) ? body.skills : [], summary: body.summary || null, updatedAt: Date.now(),
+    ...(body.skillsPolicy ? { skillsPolicy: body.skillsPolicy, skillsCustomized: body.skillsCustomized === true } : {}),
     ...(body.title ? { title: String(body.title).slice(0, 120) } : {}), ...(body.origin ? { origin: body.origin } : {}) };
   await fs.mkdir(path.dirname(target), { recursive: true });
   const temp = target + '.' + Math.random().toString(36).slice(2) + '.tmp';

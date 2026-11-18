@@ -1,0 +1,36 @@
+/* Application typography only. Deck documents live in separate iframes. */
+:root {
+  --ui-font:"Segoe UI Variable Text","Segoe UI","Microsoft YaHei UI","Microsoft YaHei","PingFang SC","Noto Sans CJK SC",system-ui,sans-serif;
+  --ui-serif:"Source Han Serif SC","Noto Serif CJK SC","Songti SC","Microsoft YaHei","PingFang SC",serif;
+  --ui-mono:"Cascadia Code",Consolas,"Microsoft YaHei UI","Microsoft YaHei",monospace;
+}
+body { -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; text-rendering:optimizeLegibility; font-synthesis:none; }
+#app { font-weight:400; }
+.modal,.menu,.ctx-menu,.agw-menu { font-family:var(--ui-font); font-weight:400; }
+#app .lib-title { font-family:var(--ui-serif); font-size:clamp(42px,4.2vw,68px); line-height:1.15; font-weight:600 !important; letter-spacing:-.025em !important; margin:12px 0 10px; }
+#app .lib-sub { font-size:15px; line-height:1.7; }
+.lib-eyebrow,.lib-count,.lib-card-meta,.lib-origin-badge,.tpl-slides,.imp-chip-meta,.cv-pages,.sb-lib-text,.sb-version,.sb-save-text { font-family:var(--ui-font); font-variant-numeric:tabular-nums; }
+#app .lib-card-title { font-size:17px !important; font-weight:600 !important; line-height:1.5; }
+#app .lib-state-title { font-family:var(--ui-font); font-size:24px; font-weight:600 !important; }
+.lib-card-cover-title,.lib-sample-title,.tpl-cover-title,.imp-sample-title { font-family:var(--ui-font); }
+.lib-eyebrow,.lib-count,.lib-card-meta { font-size:12px; }
+.lib-toolbar { flex-wrap:wrap; }
+#app .ribbon-tabs button { font-size:14px; font-weight:600 !important; }
+#app .ribbon-group-label { font-size:12px !important; font-weight:500 !important; }
+.ais-dialog .ais-tab { font-size:13px; font-weight:600 !important; }
+.ais-label,.ais-models-toolbar,.ais-model-visible { font-size:13px; }
+.ais-models-hint,.ais-subline,.ais-help,.ais-compaction>p { font-size:12px; line-height:1.7; }
+.ais-model-picked { font-family:var(--ui-font); font-size:12px; }
+.ctx-menu button,.menu-item { font-family:var(--ui-font); font-weight:400 !important; }
+.insp-label,.insp-group-label,.insp-foot-id,.insp-row-label,.tl2-ins-label,.tl2-ins-actions .btn { font-size:12px !important; }
+#agent-panel .agw-shell,.agw-menu { font-family:var(--ui-font); }
+#agent-panel .agw-prose,#agent-panel .agw-user-content { font-size:15px; line-height:1.8; }
+#agent-panel .agw-welcome p,#agent-panel .agw-suggestions button { font-size:14px; }
+#agent-panel .agw-effort-label,#agent-panel .agw-turn-note,#agent-panel .agw-worker-state { font-size:12px; }
+#agent-panel .agw-model,#agent-panel .agw-team-settings { font-size:12px; }
+#agent-panel .agw-welcome h2 { font-size:clamp(25px,2.6vw,34px); line-height:1.45; font-weight:600 !important; }
+@media(max-width:600px) {
+  #app .lib-title { font-size:44px; }
+  .library-view { padding-inline:20px; }
+  .lib-hero-actions { gap:8px; }
+}
