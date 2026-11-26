@@ -9,6 +9,7 @@
 
 import { h } from '../core/dom.js';
 import { icon } from './icons.js';
+import { editorProjectFonts } from '../core/project-fonts.js';
 
 /* 标签 id / 顺序（Lead 约定） */
 const DEFAULT_ORDER = {
@@ -46,6 +47,7 @@ const FONTS = [
   { label: 'Arial', value: 'Arial, sans-serif', match: 'arial' },
   { label: '等宽', value: 'Consolas, "Courier New", monospace', match: 'consolas' },
 ];
+const projectFonts = () => editorProjectFonts().map(font => ({ label: font.label, value: font.stack, match: font.family }));
 
 const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 56, 64, 72, 80, 96, 120, 160];
 
@@ -145,8 +147,8 @@ function fontSizeOf(sel) {
 function currentFontLabel(sel) {
   const family = String(sel?.styles?.fontFamily || '');
   if (!family) return '无衬线';
-  const low = family.toLowerCase();
-  const hit = FONTS.find((f) => low.includes(f.match));
+  const primary = family.split(',')[0].replace(/["']/g, '').trim().toLowerCase();
+  const hit = projectFonts().find(f => primary === f.match) || FONTS.find(f => family.toLowerCase().includes(f.match));
   if (hit) return hit.label;
   const first = family.split(',')[0].replace(/["']/g, '').trim();
   return first ? first.slice(0, 10) : '字体';
@@ -404,9 +406,10 @@ function arrangeItems() {
 
 function fontFamilyItems() {
   const family = String(getStyles().fontFamily || '').toLowerCase();
-  return FONTS.map((f) => ({
+  const primary = family.split(',')[0].replace(/["']/g, '').trim();
+  return [...FONTS, ...projectFonts()].map((f) => ({
     label: f.label,
-    checked: family.includes(f.match),
+    checked: f.match.startsWith('wds-font-') ? primary === f.match : family.includes(f.match),
     onClick: () => run('text.fontFamily', { family: f.value }),
   }));
 }

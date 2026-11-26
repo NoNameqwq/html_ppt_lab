@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { atomic } from './atomic-write.mjs';
 
 function chatPath(dir, session) {
   if (!session || session === 'default') return path.join(dir, '.chat.json');
@@ -16,9 +17,7 @@ export async function saveChat(dir, session, body) {
     ...(body.skillsPolicy ? { skillsPolicy: body.skillsPolicy, skillsCustomized: body.skillsCustomized === true } : {}),
     ...(body.title ? { title: String(body.title).slice(0, 120) } : {}), ...(body.origin ? { origin: body.origin } : {}) };
   await fs.mkdir(path.dirname(target), { recursive: true });
-  const temp = target + '.' + Math.random().toString(36).slice(2) + '.tmp';
-  await fs.writeFile(temp, JSON.stringify(data), 'utf8');
-  await fs.rename(temp, target);
+  await atomic(target, JSON.stringify(data));
   return { ok: true, updatedAt: data.updatedAt };
 }
 export async function listChats(dir) {

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { readChat, saveChat } from './chat-store.mjs';
+import { atomic, busy, retryBusy } from './atomic-write.mjs';
 
 const locks = new Map();
 export async function withProjectLock(dir, fn) {
@@ -16,13 +17,6 @@ const hash = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const kept = (name) => /^(\.versions|\.chats|\.git)$/i.test(name) || /^\.chat\.json(?:\.|$)/i.test(name);
 const idOf = () => 'v-' + Date.now().toString(36) + '-' + crypto.randomBytes(6).toString('hex');
 const storePath = (dir, ...parts) => path.join(dir, '.versions', ...parts);
-const busy = e => ['EPERM', 'EACCES', 'EBUSY'].includes(e?.code);
-async function retryBusy(fn) {
-  for (const delay of [0, 30, 80, 160, 300]) {
-    if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-    try { return await fn(); } catch (e) { if (!busy(e) || delay === 300) throw e; }
-  }
-}
 async function stat(file) { try { return await fs.lstat(file); } catch (e) { if (['ENOENT', 'ENOTDIR'].includes(e.code)) return null; throw e; } }
 async function directory(file) {
   await fs.mkdir(file, { recursive: true });
@@ -35,11 +29,6 @@ async function init(dir) {
   await directory(storePath(dir));
   await directory(storePath(dir, 'manifests'));
   await directory(storePath(dir, 'blobs'));
-}
-async function atomic(file, data) {
-  const temp = file + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
-  try { await fs.writeFile(temp, data); await retryBusy(() => fs.rename(temp, file)); }
-  finally { await fs.rm(temp, { force: true, maxRetries: 5, retryDelay: 50 }); }
 }
 function validPath(rel) {
   if (typeof rel !== 'string' || !rel || rel.includes('\\') || rel.includes(':') || rel.includes('\0') || path.posix.isAbsolute(rel)
@@ -297,12 +286,16 @@ export async function restoreVersion(dir, id, options = {}) {
     await stageFiles(dir, version.files, path.join(stage, 'next'), version.kind === 'legacy' ? version.legacyData : null);
     // Validate the live tree (including links) before backing it up or removing anything.
     const beforeDirectories = []; await tree(dir, beforeDirectories);
-    const sessionId = version.conversation?.sessionId || 'default';
+    const sessionId = options.targetSessionId || version.conversation?.sessionId || 'default';
     const currentChat = chat ? await readChat(dir, sessionId) : null;
+    if (currentChat && options.preserveConversationMetadata) {
+      if (currentChat.title) chat.title = currentChat.title;
+      if (currentChat.origin) chat.origin = currentChat.origin;
+    }
     const backup = await captureVersion(dir, { kind: 'backup', label: '回退前自动备份',
-      ...(chat ? { conversation: { ...version.conversation, phase: 'after', turnId: '' }, chat: currentChat } : {}) });
+      ...(chat ? { conversation: { ...version.conversation, sessionId, phase: 'after', turnId: '' }, chat: currentChat } : {}) });
     let archivedSession = null;
-    if (chat) {
+    if (chat && options.archiveConversation !== false) {
       archivedSession = 'branch-' + txId;
       await saveChat(dir, archivedSession, { ...currentChat, title: '回退前分支 · ' + (currentChat.messages?.find((m) => m.role === 'user')?.content || '对话').slice(0, 50), origin: { sessionId, versionId: id } });
     }
@@ -329,4 +322,10 @@ export async function restoreVersion(dir, id, options = {}) {
     if (busy(e)) throw error('版本回退遇到文件占用或权限限制' + (recovered ? '，已恢复回退前的完整工程' : '，未修改工程') + '。请关闭占用素材的外部程序后重试。原因：' + e.message, 409);
     throw e;
   } finally { if (!journalWritten) await cleanupStage(stage); }
+}
+
+export async function readVersionChat(dir, id) {
+  const version = await readVersion(dir, id);
+  if (!version.chatHash) throw error('此版本没有对应的对话快照');
+  return JSON.parse((await blob(dir, version.chatHash)).toString());
 }

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import { chatAssetDirectory } from '../app/js/core/chat-assets.js';
 
 export const DEFAULT_GPT_IMAGE_MODEL = 'gpt-image-1.5';
 export const DEFAULT_IMAGE_SETTINGS = Object.freeze({ enabled: false, baseUrl: '', model: 'auto', models: [], apiKey: '', size: 'auto', quality: 'auto', responseFormat: 'auto' });
@@ -75,6 +76,7 @@ export async function generateImage({ config, body = {}, projectDir, signal, sti
   const c = updateImageSettings(config, {});
   const prompt = String(body.prompt || '').trim();
   if (!prompt || prompt.length > 24000) throw problem('生图提示词需为 1–24000 字符');
+  const sessionId = body.sessionId ?? 'default', directory = chatAssetDirectory(sessionId);
   if (inFlight >= 2) throw problem('生图任务繁忙，请等待当前图片生成完成', 429);
   let models = c.models || [];
   if (c.model === 'auto' && !models.length) {
@@ -129,10 +131,16 @@ export async function generateImage({ config, body = {}, projectDir, signal, sti
     const ext = imageExtension(bytes);
     combined.throwIfAborted();
     if (!await stillEnabled()) throw problem('用户已关闭生图，本次结果未写入工程', 403);
-    const relative = 'assets/generated-' + crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 20) + '.' + ext;
-    await fs.mkdir(path.join(projectDir, 'assets'), { recursive: true });
+    const relative = directory + '/generated-' + crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 20) + '.' + ext;
+    let folder = projectDir;
+    for (const part of directory.split('/')) {
+      folder = path.join(folder, part);
+      const stat = await fs.lstat(folder).catch(error => { if (error.code !== 'ENOENT') throw error; });
+      if (stat?.isSymbolicLink()) throw problem('对话素材目录不能使用符号链接');
+      await fs.mkdir(folder, { recursive: true });
+    }
     await fs.writeFile(path.join(projectDir, relative), bytes);
-    return { ok: true, url: relative, size: bytes.length, model, revisedPrompt: String(item.revised_prompt || '').slice(0, 24000) };
+    return { ok: true, url: relative, directory, sessionId, inserted: false, size: bytes.length, model, revisedPrompt: String(item.revised_prompt || '').slice(0, 24000) };
   } catch (e) {
     if (e.status) throw e;
     if (combined.aborted) throw problem(signal?.aborted ? '生图已取消' : '生图超过 3 分钟，请重试', 504);

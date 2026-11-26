@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 
 export async function qaEfficiency({ev,cdp,until,shot,mode,providerId,model}) {
   const W='window.__WDS__',L=W+'.agent.loop';
-  const reload=async()=>{const t=await ev('performance.timeOrigin');await cdp.send('Page.reload');await until(()=>ev(`performance.timeOrigin!==${t}&&!!${W}?.agent?.loop&&!${L}.getState().loading`),'效率设置刷新');await ev(`${W}.bus.runCommand('agent.fullscreen',{open:true})`);};
+  const reload = async () => {
+    const time = await ev('performance.timeOrigin');
+    await cdp.send('Page.reload');
+    await until(() => ev(`performance.timeOrigin!==${time} && !!${W}?.agent?.loop && !${L}.getState().loading &&
+      (!${L}.projectId || ${W}.getEditor()?.bridge?.ready)`), '效率设置和当前工程刷新');
+    await ev(`${W}.bus.runCommand('agent.fullscreen',{open:true})`);
+  };
   const choose=async(label)=>{await ev(`document.querySelector('.agw-effort').click()`);await ev(`[...document.querySelectorAll('.agw-menu-item')].find(b=>b.querySelector('.agw-menu-copy>span').textContent===${JSON.stringify(label)}).click()`);};
   assert.equal(await ev(`document.querySelector('.agw-fast').getAttribute('aria-pressed')`),'false');
   await ev(`${W}.bus.runCommand('agent.fullscreen',{open:true});document.querySelector('.agw-fast').click()`);await choose('关闭思考');
@@ -14,7 +20,7 @@ export async function qaEfficiency({ev,cdp,until,shot,mode,providerId,model}) {
   await until(()=>ev(`document.querySelector('.agw-generation-timer').textContent!=='用时 0:00'`),'计时持续增长');
   assert(await ev(`document.querySelector('.agw-fast').disabled&&document.querySelector('.agw-effort').disabled`));
   assert.equal(await ev(`document.querySelector('.agw-status').textContent`),'正在准备');
-  assert(await ev(`window.__fastCalls[0].reasoning_effort==='none'&&window.__fastCalls[0].messages[0].content.includes('## Fast generation mode')&&window.__fastCalls[0].messages[0].content.includes('## Efficient execution')`));
+  assert(await ev(`window.__fastCalls[0].reasoning_effort==='none'&&window.__fastCalls[0].messages[0].content.includes('## Fast generation mode')&&window.__fastCalls[0].messages[0].content.includes('## Task planning by effort and scope')`));
   await shot('efficient-generation-desktop-'+mode);
   const theme=await ev(`${W}.store.get().ui.theme`);
   for(const appearance of ['light','dark']){

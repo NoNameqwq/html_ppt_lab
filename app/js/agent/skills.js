@@ -41,6 +41,12 @@ function normalizeSkill(raw) {
 
 /** 读取技能目录（缓存 + 兜底） */
 export async function loadCatalog(ctx, opts = {}) {
+  if (opts.requiredIds) {
+    const data = await ctx.api.skills();
+    const list = (data?.skills || []).map(normalizeSkill).filter(Boolean);
+    for (const id of opts.requiredIds) if (!list.some(skill => skill.id === id && skill.content.trim())) throw new Error('强制 Skill 读取失败或正文为空：' + id);
+    return list;
+  }
   if (catalogCache && !opts.force) return catalogCache;
   if (inflight && !opts.force) return inflight;
   inflight = (async () => {
@@ -179,10 +185,11 @@ export function openManager(ctx, opts = {}) {
 
   return ctx.dialog.open({
     title: '技能管理',
-    sub: '内置前端技能 · 开关随工程会话持久化',
+    sub: '内置技能正文只读 · 开关随工程会话持久化',
     width: 'lg',
     body,
     actions: [
+      { label: '自定义指令与 Skill', value: 'userInstructions', kind: 'ghost' },
       {
         label: '恢复默认',
         kind: 'ghost',
@@ -197,5 +204,11 @@ export function openManager(ctx, opts = {}) {
       },
       { label: '完成', value: true, kind: 'primary' },
     ],
+  }).then(result => {
+    if (result === 'userInstructions') {
+      if (opts.onUserInstructions) opts.onUserInstructions();
+      else ctx.bus.runCommand('agent.openUserInstructions');
+    }
+    return result;
   });
 }

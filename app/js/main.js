@@ -155,6 +155,13 @@ function bindGlobalKeys() {
 
 /* ---------- 启动 ---------- */
 async function boot() {
+  const { editorProjectFonts, projectFontCss } = await import('./core/project-fonts.js');
+  const css = projectFontCss(editorProjectFonts());
+  if (css) {
+    const style = document.createElement('style');
+    style.textContent = css;
+    document.head.append(style);
+  }
   initTheme();
   ctx.qa = parseQuery().qa === '1';
   if (ctx.qa) document.documentElement.classList.add('qa');

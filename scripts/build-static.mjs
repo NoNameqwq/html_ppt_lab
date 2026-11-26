@@ -9,7 +9,8 @@ const mime=(name)=>({css:'text/css',js:'text/javascript',mjs:'text/javascript',w
 const bundle={resources:{},templates:{},samples:{},skills:[],settings:{providers:[{id:'deepseek',name:'DeepSeek',baseUrl:'https://api.deepseek.com/v1',apiKey:'',model:'deepseek-chat',models:[],wire:'openai'},{id:'opencode',name:'OpenCode Go',baseUrl:'https://opencode.ai/zen/go/v1',apiKey:'',model:'',models:[],wire:'auto'}],agent:{contextLimit:100000000,maxTokens:0,temperature:.7,streaming:true},ui:{},search:{provider:'deepseek',baseUrl:'https://api.deepseek.com',maxResults:5},imageGeneration:{enabled:false,baseUrl:'',apiKey:'',model:'auto',models:[]}}};
 async function resources(dir){for(const entry of await fs.readdir(path.join(root,dir),{withFileTypes:true})){const name=dir+'/'+entry.name;
   // hanzi stroke data is ~40MB; the static single file serves /api/hanzi as empty and falls back to text.
-  if(entry.name==='hanzi'&&dir==='app/vendor')continue;
+  // This local font pack exceeds the single-file bundle's string size limit.
+  if(dir==='app/vendor'&&['hanzi','project-fonts'].includes(entry.name))continue;
   if(entry.isDirectory())await resources(name);else {const bytes=await fs.readFile(path.join(root,name));bundle.resources['/'+name]=`data:${mime(name)};base64,${bytes.toString('base64')}`;}}}
 await resources('editor');await resources('app/vendor');
 for(const type of ['templates','samples'])for(const entry of await fs.readdir(path.join(root,type),{withFileTypes:true})){

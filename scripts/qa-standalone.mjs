@@ -5,6 +5,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import assert from 'node:assert/strict';
+import { qaSkillPicker } from './qa-skill-picker.mjs';
 import { fileURLToPath } from 'node:url';
 import {pptxFixture} from './pptx-fixture.mjs';
 import { pathToFileURL } from 'node:url';
@@ -167,6 +168,7 @@ try {
     await until(()=>ev(`!!document.querySelector('.slide-list iframe')?.contentDocument?.querySelector('#wpx-stage')`),'缩略图就绪');
     assert(await ev(`[...document.querySelectorAll('.slide-list iframe')].every(f=>!f.contentDocument?.querySelector('#wds-present-tools'))`));await shot('static-editor');
   });
+  await step('静态版聊天底部 Skill 快捷多选、搜索、持久化及窄屏主题', () => qaSkillPicker({ ev, cdp, until, shot, mode: 'static' }));
   await step('浏览器直连模型，流式多轮、实际工具调用和版本交付可用',async()=>{
     await api('/api/settings/user',{providers:[{id:'static-test',name:'Static Test',baseUrl:'http://127.0.0.1:'+mockPort+'/v1',apiKey:'fake-static-secret',model:'gpt-test',models:[{id:'gpt-test',contextLength:1000000,maxOutput:8192,tools:true,vision:true}],wire:'openai'}]},'PUT');
     await ev(`(async()=>{const settings=await window.__WDS__.api.getSettings();window.__WDS__.store.update(s=>{s.settings=settings});window.__WDS__.bus.runCommand('app.toggleAgent');window.__WDS__.agent.loop.setProvider('static-test','gpt-test')})()`);
@@ -178,10 +180,10 @@ try {
     assert(await ev(`!!document.querySelector('.agw-delivery-play')`));
     await input('继续解释');await idle();assert((await ev(`${L}.messages`)).filter(m=>m.role==='user').length===2);await shot('static-agent');
   });
-  await step('版本恢复同步对话，后续消息保留分支',async()=>{
+  await step('版本恢复同步回溯对话，删除当前分支后续消息',async()=>{
     await ev(`${L}.restoreCheckpoint(${JSON.stringify(version)},{rewindConversation:true})`);await ready();
     assert(!await ev(`window.__WDS__.getEditor().iframe.contentDocument.body.textContent.includes('单文件 Agent 的实际修改')`));
-    assert((await ev(`${L}.listSessions()`)).chats.some(c=>c.id.startsWith('branch-')));
+    assert.equal((await ev(`${L}.messages`)).length,0);
   });
   await step('刷新后工程、密钥和版本保留，设置输出不泄露明文密钥',async()=>{
     const previous=await ev('performance.timeOrigin');await cdp.send('Page.reload');await until(()=>ev(`performance.timeOrigin!==${previous}`),'刷新完成');await ready();
@@ -232,11 +234,13 @@ try {
     const image=await ev(`window.__WDS__.bus.runCommand('insert.image',{src:${JSON.stringify(asset.url)}})`);assert(image.ok);
     await until(()=>ev(`(()=>{const d=window.__WDS__.getEditor().iframe.contentDocument;return [...d.querySelectorAll('img')].filter(i=>i.src.startsWith('data:')&&i.naturalWidth>0).length>=2})()`),'插入图片实际显示');
   });
-  await step('生图默认关闭，手动开启后直连图像模型并插入工程素材',async()=>{
+  await step('生图默认关闭，手动开启后只保存到对话素材目录',async()=>{
     const denied=await ev(`fetch('/api/projects/'+${JSON.stringify(project.id)}+'/generate-image',{method:'POST',body:JSON.stringify({prompt:'leaf'})}).then(r=>r.status)`);assert.equal(denied,403);
     const agentDenied=await ev(`fetch('/api/settings',{method:'PUT',body:JSON.stringify({imageGeneration:{enabled:true}})}).then(r=>r.status)`);assert.equal(agentDenied,403);
     await api('/api/settings/user',{imageGeneration:{enabled:true,baseUrl:'http://127.0.0.1:'+mockPort+'/v1',apiKey:'fake-image-secret',model:'auto',models:[{id:'gpt-image-1.5'}]}},'PUT');
-    const result=await api('/api/projects/'+project.id+'/generate-image',{prompt:'leaf',size:'1536x1024',quality:'high'});assert(result.url.startsWith('assets/'));
+    const original=await ev(`window.__WDS_STATIC__.state.projects[${JSON.stringify(project.id)}].files['index.html']`);
+    const result=await api('/api/projects/'+project.id+'/generate-image',{prompt:'leaf',size:'1536x1024',quality:'high',sessionId:'static-image-chat'});assert(result.url.startsWith('assets/chats/static-image-chat/'));assert.equal(result.inserted,false);
+    assert.equal(await ev(`window.__WDS_STATIC__.state.projects[${JSON.stringify(project.id)}].files['index.html']`),original);
     assert((await ev(`fetch('/api/projects/'+${JSON.stringify(project.id)}+'/file?path='+${JSON.stringify(result.url)}).then(r=>r.json())`)).content.startsWith('data:image/png;base64'));
   });
   await step('生成中关闭生图立即生效，未把关闭后的结果写入素材',async()=>{
@@ -293,7 +297,8 @@ try {
     const previous=await ev('performance.timeOrigin');await cdp.send('Page.navigate',{url:pathToFileURL(portablePath).href+'#/p/'+project.id});await until(()=>ev(`performance.timeOrigin!==${previous}`),'私有工作台打开');await ready();
     assert.equal(await ev(`window.__WDS_STATIC__.state.settings.providers.find(p=>p.id==='static-test').apiKey`),'fake-static-secret');
     assert.equal(await ev(`window.__WDS_STATIC__.state.projects[${JSON.stringify(project.id)}].versions.length`),backup.projects[project.id].versions.length);
-    assert((await ev(`window.__WDS__.api.listChats(${JSON.stringify(project.id)})`)).chats.some(c=>c.id.startsWith('branch-')));
+    assert.deepEqual(await ev(`window.__WDS_STATIC__.state.projects[${JSON.stringify(project.id)}].chats`),backup.projects[project.id].chats);
+    assert.deepEqual(await ev(`window.__WDS_STATIC__.state.projects[${JSON.stringify(project.id)}].branchState`),backup.projects[project.id].branchState);
   });
   await step('JSON 备份可以经界面导入，刷新后继续使用',async()=>{
     backup.projects[project.id].meta.name='备份恢复验收';

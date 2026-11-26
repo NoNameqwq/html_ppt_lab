@@ -21,6 +21,15 @@
 #agent-panel .agw-context-dot { width:10px; height:10px; border-radius:2px; flex:none; }
 #agent-panel .agw-context-note { display:block; font-size:10px; line-height:1.6; margin-top:17px; color:var(--cw-faint); }
 :root { --agent-w:500px; }
+.wds-browser { display:grid; gap:10px; }
+.wds-browser-address, .wds-browser-toolbar, .wds-browser-targets { display:flex; align-items:center; gap:6px; }
+.wds-browser-address .input { flex:1; min-width:0; }
+.wds-browser-toolbar, .wds-browser-targets { flex-wrap:wrap; }
+.wds-browser-targets { max-height:112px; overflow:auto; }
+.wds-browser-targets button { max-width:100%; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; }
+.wds-browser-preview { display:block; width:100%; max-height:52vh; object-fit:contain; background:var(--surface-2); border-radius:8px; }
+.wds-browser [hidden] { display:none; }
+.wds-browser-status { color:var(--ink-2); font-size:12px; overflow-wrap:anywhere; }
 .agw-version-modal { max-width:min(680px, calc(100vw - 24px)); color:var(--ink); }
 .agw-version-modal .modal-body { overflow-y:auto; max-height:65vh; }
 .agw-version-modal .modal-sub { overflow-wrap:anywhere; }
@@ -182,7 +191,7 @@
 #agent-panel .agw-text-button { display:inline-flex; align-items:center; gap:5px; border:0; border-radius:4px; padding:3px 5px; background:transparent; color:var(--cw-muted); font-size:11px; }
 #agent-panel .agw-text-button:hover { color:var(--cw-text); background:var(--cw-hover); }
 #agent-panel .agw-jump { position:absolute; bottom:8px; left:50%; transform:translateX(-50%); border:1px solid var(--cw-border); border-radius:50%; width:33px; height:33px; background:var(--cw-bg); color:var(--cw-text); }
-#agent-panel .agw-composer { flex:none; padding:0 12px 12px; background:var(--cw-bg); }
+#agent-panel .agw-composer { position:relative; flex:none; padding:0 12px 12px; background:var(--cw-bg); }
 #agent-panel .agw-status { display:flex; align-items:center; min-height:25px; padding:0 9px 5px; color:var(--cw-muted); font-size:11px; }
 #agent-panel .agw-status:empty { min-height:9px; padding:0; }
 #agent-panel .agw-status:not(:empty)::before { content:''; width:5px; height:5px; margin-right:7px; border-radius:50%; background:var(--cw-muted); animation:cw-breathe 1.5s ease-in-out infinite; }
@@ -208,6 +217,30 @@
 #agent-panel .agw-compose-options button.is-on { color:var(--cw-text);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--cw-bg)); }
 #agent-panel .agw-compose-options button:disabled,#agent-panel .agw-effort:disabled { opacity:.5;cursor:default; }
 #agent-panel .agw-compose-options button:focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
+#agent-panel .agw-skill-picker { position:absolute;z-index:20;left:12px;right:12px;bottom:calc(100% + 8px);max-height:min(420px,50vh);display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--cw-border);border-radius:14px;background:var(--cw-bg);color:var(--cw-text);box-shadow:0 12px 36px #0003;animation:agw-skill-enter .16s ease-out; }
+#agent-panel .agw-skill-heading,#agent-panel .agw-skill-footer { display:flex;align-items:center;justify-content:space-between;gap:10px;flex:none; }
+#agent-panel .agw-skill-heading strong { font-size:14px;font-weight:600; }
+#agent-panel .agw-skill-picker button { border:0;border-radius:7px;background:transparent;color:var(--cw-muted);padding:6px 8px;font-size:12px; }
+#agent-panel .agw-skill-picker button:hover { background:var(--cw-hover);color:var(--cw-text); }
+#agent-panel .agw-skill-picker button:disabled { opacity:.5;cursor:default; }
+#agent-panel .agw-skill-picker input[type=search] { flex:none;width:100%;min-width:0;border:1px solid var(--cw-border);border-radius:8px;padding:8px 10px;background:var(--cw-field);color:var(--cw-text);font:inherit;font-size:13px; }
+#agent-panel .agw-skill-list { overflow-y:auto;overscroll-behavior:contain;min-height:0; }
+#agent-panel .agw-skill-row { display:flex;align-items:flex-start;gap:10px;padding:9px 7px;border-radius:8px; }
+#agent-panel .agw-skill-row:hover { background:var(--cw-hover); }
+#agent-panel .agw-skill-row input { flex:none;margin:0;accent-color:var(--accent);width:16px;height:16px; }
+#agent-panel .agw-skill-selection { display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0;cursor:pointer; }
+#agent-panel .agw-skill-selection > span { min-width:0;display:grid;gap:4px;overflow-wrap:anywhere; }
+#agent-panel .agw-skill-picker .agw-skill-force { display:flex;align-items:center;gap:6px;flex:none;min-height:32px;white-space:nowrap; }
+#agent-panel .agw-skill-force-check { display:grid;place-items:center;width:16px;height:16px;border:1px solid var(--cw-muted);border-radius:4px; }
+#agent-panel .agw-skill-force-check svg { visibility:hidden; }
+#agent-panel .agw-skill-force[aria-checked="true"] .agw-skill-force-check { color:#fff;background:var(--accent);border-color:var(--accent); }
+#agent-panel .agw-skill-force[aria-checked="true"] svg { visibility:visible; }
+#agent-panel .agw-skill-force[aria-disabled="true"] { cursor:default;opacity:.65; }
+#agent-panel .agw-skill-row strong { font-size:13px;font-weight:500; }
+#agent-panel .agw-skill-row small,#agent-panel .agw-skill-empty { font-size:11px;line-height:1.6;color:var(--cw-muted); }
+#agent-panel .agw-skill-footer { border-top:1px solid var(--cw-border);padding-top:8px; }
+@keyframes agw-skill-enter { from { opacity:0; } to { opacity:1; } }
+@media(prefers-reduced-motion:reduce) { #agent-panel .agw-skill-picker { animation:none; } }
 #agent-panel .agw-status-row { display:flex;align-items:center;gap:12px;min-width:0; }
 #agent-panel .agw-status-row .agw-status { flex:1;min-width:0;font-size:12px; }
 #agent-panel .agw-generation-timer { flex:none;font-size:12px;color:var(--cw-muted);font-variant-numeric:tabular-nums;white-space:nowrap;padding:0 9px 5px; }
@@ -248,6 +281,8 @@
 #agent-panel .agw-queued { display:flex; align-items:center; gap:8px; padding:3px 0; font-size:11px; color:var(--cw-muted); }
 #agent-panel .agw-queued > span:nth-child(2) { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 #agent-panel .agw-queued small { font-size:10px; white-space:nowrap; }
+#agent-panel .agw-queued .agw-prioritize { flex:none; min-height:26px; white-space:nowrap; color:var(--cw-text); }
+#agent-panel .agw-queued .agw-prioritize:disabled { opacity:.45; background:transparent; cursor:default; }
 #agent-panel .agw-plan { color:var(--cw-muted); margin:3px 9px 9px; font-size:11px; }
 #agent-panel .agw-plan > summary { display:flex; align-items:center; gap:7px; cursor:pointer; list-style:none; }
 #agent-panel .agw-plan > summary > span:nth-child(2) { flex:1; }
@@ -295,3 +330,10 @@
   #agent-panel .agw-model { max-width:60%; font-size:10px; }
 }
 @media(prefers-reduced-motion:reduce) { #agent-panel .agw-shell * { animation:none !important; scroll-behavior:auto !important; } }
+/* Named project branches use the same surfaces and typography as the agent. */
+.agw-branches>p{font-size:13px;line-height:1.7;color:var(--muted)}
+.agw-branch-list{display:grid;gap:10px;margin-top:16px}
+.agw-branch-row{display:flex;align-items:center;gap:10px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface-2)}
+.agw-branch-info{display:grid;gap:5px;flex:1;min-width:0;overflow-wrap:anywhere}
+.agw-branch-info strong{font-size:13px}.agw-branch-info small{font-size:12px;color:var(--muted)}
+@media(max-width:480px){.agw-branch-row{flex-wrap:wrap}.agw-branch-info{min-width:60%}}

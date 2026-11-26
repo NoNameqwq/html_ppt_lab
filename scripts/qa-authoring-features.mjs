@@ -4,8 +4,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import net from 'node:net';
 import assert from 'node:assert/strict';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {pptxFixture} from './pptx-fixture.mjs';
+import { qaSkillPicker } from './qa-skill-picker.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const out = path.join(root, 'output', 'playwright');
@@ -95,14 +96,84 @@ try {
   await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('wds:agent:model',JSON.stringify({providerId:'workspace-test',model:'workspace-test'})); localStorage.setItem('wds:agent:permission','full');` });
   await cdp.send('Page.navigate', { url: base + '/?qa=1#/p/' + encodeURIComponent(project.id) });
   await ready(); await ev(`window.__WDS__.bus.runCommand('app.toggleAgent')`);
+  await step('聊天底部 Skill 快捷多选、搜索、持久化及窄屏主题', () => qaSkillPicker({ ev, cdp, until, shot, mode: 'backend' }));
 
   const exec = (name,args) => ev(`(async()=>{return (await import('/app/js/agent/tools.js')).createToolExecutor(window.__WDS__).execute(${JSON.stringify(name)},${JSON.stringify(args)},{permission:'full'})})()`);
+
+  await step('工作台和 Agent 可打开 127.0.0.1 页面并截图', async () => {
+    await ev(`void window.__WDS__.bus.runCommand('agent.openBrowser')`);
+    await until(() => ev(`document.querySelector('.wds-browser-status')?.textContent.includes('输入网址')`), '浏览器对话框可用');
+    await ev(`(() => {
+      const form = document.querySelector('.wds-browser-address');
+      form.querySelector('input').value = ${JSON.stringify('127.0.0.1:' + appPort + '/')};
+      form.requestSubmit();
+    })()`);
+    await until(() => ev(`document.querySelector('.wds-browser-preview')?.getAttribute('src')?.startsWith('data:image/jpeg;base64,')`), '本地网页截图');
+    const screenshot = await exec('browser_use', { action: 'screenshot' });
+    assert.equal(screenshot.url, base + '/');
+    assert.match(screenshot.images[0], /^data:image\/jpeg;base64,/);
+    assert((await exec('browser_use', { action: 'close' })).ok);
+    await ev(`document.querySelector('.wds-browser').closest('.modal').querySelector('.modal-close').click()`);
+    await until(() => ev(`!document.querySelector('.wds-browser')`), '浏览器对话框关闭');
+  });
+
+  await step('画布可加载全部字体，离线演示只嵌入使用的字重', async () => {
+    const family = 'wds-font-boutique-bitmap';
+    const registry = await exec('fonts_list', { text: '江山如画' });
+    assert.equal(registry.fonts.filter(font => font.bundled).length, 23);
+    const deck = await json(base, '/api/projects', { name: '字体验收', templateId: 'blank' });
+    const rootUrl = base + '/p/' + encodeURIComponent(deck.project.id) + '/index.html';
+    const projectApi = base + '/api/projects/' + encodeURIComponent(deck.project.id);
+    const file = await json(base, '/api/projects/' + encodeURIComponent(deck.project.id) + '/file');
+    const marker = `<div id="font-test" style="font:700 64px ${family}">江山如画</div>`;
+    const update = await fetch(projectApi + '/file', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'index.html', content: file.content.replace('</body>', marker + '</body>') }),
+    });
+    assert(update.ok);
+    await ev(`(() => {
+      const frame = document.createElement('iframe');
+      frame.id = 'font-fixture';
+      frame.src = ${JSON.stringify(rootUrl + '?wpx=edit')};
+      document.body.append(frame);
+    })()`);
+    await until(() => ev(`!!document.querySelector('#font-fixture')?.contentDocument?.querySelector('#font-test')`), '字体验证画布');
+    const families = await ev(`[...document.querySelector('#font-fixture').contentDocument.fonts]
+      .filter(face => face.family.startsWith('wds-font-')).map(face => face.family + ':' + face.weight)`);
+    assert.equal(families.length, 35);
+    for (const name of families) {
+      const status = await ev(`(async () => {
+        const page = document.querySelector('#font-fixture').contentDocument;
+        const face = [...page.fonts].find(face => face.family + ':' + face.weight === ${JSON.stringify(name)});
+        try { await face.load(); } catch (error) { return error.message; }
+        return face.status;
+      })()`);
+      assert.equal(status, 'loaded', name);
+    }
+    const html = await (await fetch(projectApi + '/export')).text();
+    assert.equal(html.match(/data:font\/ttf;base64,/g)?.length, 1);
+    assert.match(html, /font-weight:700;font-style:normal;font-display:swap/);
+    await ev(`document.querySelector('#font-fixture').remove()`);
+    const offlineFile = path.join(out, 'offline-font.html');
+    await fs.writeFile(offlineFile, html);
+    const offline = await cdp.send('Target.createTarget', { url: pathToFileURL(offlineFile).href, background: true });
+    const offlineTarget = await until(async () => (await (await fetch('http://127.0.0.1:' + debugPort + '/json/list')).json()).find(p => p.id === offline.targetId), '离线字体验证页');
+    const offlineCdp = new CDP(offlineTarget.webSocketDebuggerUrl);
+    try {
+      await offlineCdp.open();
+      await until(() => offlineCdp.eval("!!document.querySelector('#font-test')"), '离线测试文本');
+      assert.deepEqual(await offlineCdp.eval(`document.fonts.load('700 64px ${family}', '江山如画').then(faces => faces.map(face => [face.family, face.weight, face.status]))`), [[family, '700', 'loaded']]);
+    } finally {
+      offlineCdp.ws?.close();
+      await cdp.send('Target.closeTarget', { targetId: offline.targetId });
+    }
+  });
 
   await step('统一 API 设置切换保留草稿，模型获取和搜索测试不保存，取消不启用生图', async () => {
     const before = await json(base, '/api/settings');
     await ev(`window.__WDS__.bus.runCommand('agent.openSettings')`);
     await until(() => ev(`!!document.querySelector('.ais-dialog')`), '统一设置窗口');
-    assert.equal(await ev(`document.querySelectorAll('.ais-sections [role="tab"]').length`), 3);
+    assert.deepEqual(await ev(`[...document.querySelectorAll('.ais-sections [role="tab"]')].map(t=>t.id)`), ['ais-nav-chat','ais-nav-search','ais-nav-image','ais-nav-backup','ais-nav-instructions']);
     await ev(`(()=>{const b=document.querySelector('[aria-label="对话 Base URL"]'),k=document.querySelector('[aria-label="对话 API Key"]');b.value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};b.dispatchEvent(new Event('input'));k.value='draft-chat-key';k.dispatchEvent(new Event('input'));document.querySelector('#ais-nav-search').click();document.querySelector('[aria-label="搜索 Base URL"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort)};document.querySelector('[aria-label="搜索 API Key"]').value='draft-search-key';[...document.querySelectorAll('.ais-search-form button')].find(b=>b.textContent==='测试搜索连接').click();})()`);
     await until(()=>ev(`document.querySelector('.ais-search-form').textContent.includes('连接成功')`),'草稿搜索测试');
     await ev(`document.querySelector('#ais-nav-image').click();document.querySelector('[aria-label="生图服务地址"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};document.querySelector('[aria-label="生图 API Key"]').value='fake-image-secret';document.querySelector('[aria-label="生图 API Key"]').dispatchEvent(new Event('input'));document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=true;`);
@@ -250,18 +321,25 @@ try {
     assert.equal((await json(base,'/api/settings')).imageGeneration.enabled,false);
     assert.equal((await json('http://127.0.0.1:'+modelPort,'/test/image-stats')).generatedImages,0);
   });
-  await step('用户手动配置开启后，Agent 生图自动入页、记录版本并可随 HTML 导出',async()=>{
+  await step('Agent 生图只保存对话素材，按需插入后可随 HTML 导出',async()=>{
     await ev(`void import('/app/js/agent/image-settings.js').then(m=>m.openImageSettings(window.__WDS__))`);await sleep(150);
     await ev(`document.querySelector('[aria-label="生图服务地址"]').value=${JSON.stringify('http://127.0.0.1:'+modelPort+'/v1')};document.querySelector('[aria-label="生图 API Key"]').value='fake-image-secret';document.querySelector('[aria-label="允许 Agent 使用生图服务"]').checked=true;`);
     await ev(`document.querySelector('[aria-label="生图 API Key"]').dispatchEvent(new Event('input',{bubbles:true}))`);
     await until(()=>ev(`document.querySelector('.ais-image-form').textContent.includes('已发现 1 个生图模型')`),'自动获取图像模型');
     await shot('authoring-image-settings');await ev(`[...document.querySelectorAll('.ais-dialog button')].find(b=>b.textContent==='保存').click()`);await sleep(250);
     assert.equal((await json(base,'/api/settings')).imageGeneration.enabled,true);assert(!JSON.stringify(await json(base,'/api/settings')).includes('fake-image-secret'));
-    await newChat();await input('IMAGE_INSERT_TEST');await idle();
+    await newChat();const pageBefore=await ev('window.__WDS__.store.get().deck.current');await input('IMAGE_INSERT_TEST');await idle();
     assert(await ev(`${L}.messages.some(m=>m.role==='tool'&&m.name==='deck_generate_image'&&JSON.parse(m.content).ok)`));
-    const src=await ev(`window.__WDS__.getEditor().iframe.contentDocument.querySelector('img[src^="assets/generated-"]').getAttribute('src')`);assert(src);
-    await until(()=>ev(`(()=>{const img=window.__WDS__.getEditor().iframe.contentDocument.querySelector('img[src^="assets/generated-"]');return img.complete&&img.naturalWidth>0})()`),'本地图片载入');
+    const generatedAsset=await ev(`JSON.parse(${L}.messages.findLast(m=>m.role==='tool'&&m.name==='deck_generate_image').content)`);
+    const src=generatedAsset.url,session=await ev(`${L}.getState().sessionId`);assert(src.startsWith('assets/chats/'+session+'/'));assert.equal(generatedAsset.inserted,false);
+    assert.equal(await ev('window.__WDS__.store.get().deck.current'),pageBefore);
+    assert.equal(await ev(`window.__WDS__.getEditor().iframe.contentDocument.querySelectorAll('img[src^="assets/chats/"]').length`),0);
+    assert((await fetch(base+'/p/'+encodeURIComponent(project.id)+'/'+src)).ok);
     const turn=await ev(`${L}.messages.find(m=>m.role==='user')`);assert(turn.versions[project.id].before);assert(turn.versions[project.id].after);
+    await ev(`window.__WDS__.getEditor().bridge.call('go',{index:2})`);
+    assert((await exec('deck_insert_image',{src,x:1450,y:700,w:240,h:200})).ok);
+    await ev(`window.__WDS__.getEditor().saveNow({reason:'qa-image-placement'})`);
+    await until(()=>ev(`(()=>{const img=window.__WDS__.getEditor().iframe.contentDocument.querySelector('img[src^="assets/chats/"]');return img&&img.complete&&img.naturalWidth>0})()`),'按需插入的本地图片载入');
     const html=await (await fetch(base+'/api/projects/'+encodeURIComponent(project.id)+'/export')).text();assert(html.includes('data:image/png;base64'));assert(html.includes('data:font/woff2;base64'));assert(html.includes('data-wds-navigation'));assert(html.includes('go-id:'));
     assert.equal((await json('http://127.0.0.1:'+modelPort,'/test/image-stats')).generatedImages,1);
     const generated=(await json('http://127.0.0.1:'+modelPort,'/test/image-stats')).imagePayloads[0];
@@ -304,6 +382,72 @@ try {
       assert(await ev(`!!document.querySelector('#portable-test').contentDocument.querySelector('.is-active .katex')`));
       await shot('authoring-portable-offline');
     } finally {await cdp.send('Network.emulateNetworkConditions',{offline:false,latency:0,downloadThroughput:-1,uploadThroughput:-1});}
+  });
+  await step('回退后读取中断可重试，图片和文档重新填回输入框', async () => {
+    const { project: rewindProject } = await json(base, '/api/projects', { name: '回退附件验收', templateId: 'blank' });
+    await cdp.send('Page.navigate', { url: base + '/?qa=1#/p/' + encodeURIComponent(rewindProject.id) });
+    await until(() => ev(`window.__WDS__?.getEditor()?.projectId===${JSON.stringify(rewindProject.id)}`), '回退测试工程');
+    await ready();
+    await ev(`if(document.querySelector('#app').dataset.agent!=='open')window.__WDS__.bus.runCommand('app.toggleAgent')`);
+    await ev(`(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['回退附件的原始内容'], '回退资料.md', { type: 'text/markdown' }));
+      const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6bZsAAAAASUVORK5CYII='), ch => ch.charCodeAt(0));
+      dt.items.add(new File([bytes], '回退图片.png', { type: 'image/png' }));
+      const chooser = document.querySelector('.agw-composer input[type=file]');
+      chooser.files = dt.files;
+      chooser.dispatchEvent(new Event('change'));
+    })()`);
+    await until(() => ev(`document.querySelectorAll('.agw-file[data-status=ready]').length===2`), '附件读取');
+    await input('VERSION_TURN 回退附件验收');
+    await idle();
+    const original = await ev(`${L}.messages.find(m=>m.role==='user')`);
+    assert(original.versions[rewindProject.id].before);
+    assert(original.assetPaths[0]);
+    await input('FOLLOWUP 待回退消息');
+    await idle();
+    await ev(`document.querySelector('.agw-user-revert:not(.hidden)').click()`);
+    await until(() => ev(`!!document.querySelector('.agw-version-modal .modal-foot .btn--primary')`), '回退确认');
+    await ev(`(() => {
+      const api = window.__WDS__.api, read = api.getChat;
+      api.getChat = async () => {
+        api.getChat = read;
+        throw new Error('验收模拟：会话读取中断');
+      };
+    })()`);
+    await ev(`document.querySelector('.agw-version-modal .modal-foot .btn--primary').click()`);
+    await until(() => ev(`!${L}.getState().loading&&document.querySelector('.agw-error button')?.textContent==='重新读取会话'`), '显示会话重读入口');
+    assert.equal(await ev(`${L}.messages.filter(m=>m.role==='user').length`), 2);
+    await ev(`document.querySelector('.agw-error button').click()`);
+    await until(() => ev(`document.querySelectorAll('.agw-file[data-status=ready]').length===2`), '回填附件');
+    assert.equal(await ev(`${L}.messages.length`), 0);
+    assert.equal(await ev(`document.querySelector('.agw-input').value`), original.content);
+    assert.deepEqual(await ev(`[...document.querySelectorAll('.agw-file strong')].map(el=>el.textContent)`), ['回退资料.md', '回退图片.png']);
+    assert.equal(await ev(`document.querySelector('.agw-file img').src`), original.images[0]);
+    await input('FOLLOWUP 重发回退附件');
+    await idle();
+    const resent = await ev(`${L}.messages.find(m=>m.role==='user')`);
+    assert.equal(resent.docs[0].text, original.docs[0].text);
+    assert.deepEqual(resent.images, original.images);
+    assert.deepEqual(resent.assetPaths, original.assetPaths);
+    assert((await fetch(base + '/p/' + encodeURIComponent(rewindProject.id) + '/' + resent.assetPaths[0])).ok);
+  });
+  await step('聊天输入框粘贴的图片会传到手动配置的模型', async () => {
+    await ev(`(async () => {
+      const ctx = window.__WDS__;
+      const settings = await ctx.api.putUserSettings({ providers: [{ id: 'workspace-test', model: 'manual-vision-qa' }] });
+      ctx.store.update(s => { s.settings.providers = settings.providers; });
+      ctx.agent.loop.setProvider('workspace-test', 'manual-vision-qa');
+      const bytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6bZsAAAAASUVORK5CYII='), ch => ch.charCodeAt(0));
+      const data = new DataTransfer();
+      data.items.add(new File([bytes], '粘贴.png', { type: 'image/png' }));
+      document.querySelector('.agw-input').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    })()`);
+    await until(() => ev(`!!document.querySelector('.agw-file[data-status=ready] img')`), '粘贴图片预览');
+    assert.equal(await ev(`${L}.getState().model`), 'manual-vision-qa');
+    assert.equal(await ev(`${L}.getState().modelInfo.vision`), undefined);
+    await input('PASTE_IMAGE_QA 请看图片');
+    await until(() => ev(`!${L}.streaming&&${L}.messages.at(-1)?.content==='上游已收到实际图片'`), '模型上游收到图片');
   });
   await step('浏览器无 JavaScript 异常',async()=>{assert.deepEqual(report.errors,[]);});
 } catch (error) {

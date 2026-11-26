@@ -1,5 +1,7 @@
 import path from 'node:path';
 import {createExportPlan,exportReferences,scriptKind,shouldKeepRuntime,optimizeExportCss,optimizeExportHtml,exportManifest} from '../app/js/core/export-plan.js';
+import { prependProjectFontStyle, projectFontCss, projectFontFace, projectFontStyle } from '../app/js/core/project-fonts.js';
+import { projectFontFacesFor, splitProjectFontStyles } from '../app/js/core/project-font-export.js';
 
 const MIME={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.svg':'image/svg+xml','.woff2':'font/woff2','.woff':'font/woff','.ttf':'font/ttf','.mp4':'video/mp4','.webm':'video/webm','.mp3':'audio/mpeg'};
 const safeScript=(s)=>s.replace(/<!--/g,'\\x3c!--').replace(/<\/script/gi,'<\\/script');
@@ -22,8 +24,9 @@ export async function deckDocument({read,shared,base='',portable=false}) {
   };
   const cache=new Map();
   const bytes=async(file)=>{if(!cache.has(file))cache.set(file,Promise.resolve().then(()=>file.startsWith('/')?shared(file):read(file)).catch(()=>null));return cache.get(file);};
-  let plan;
+  let plan, embeddedFonts;
   if(portable){
+    ({ html, embedded: embeddedFonts } = splitProjectFontStyles(html));
     const sources={};
     await Promise.all([...exportReferences(html,{patches,timeline})].map(async([url])=>{const file=resolve(url),data=file&&await bytes(file);if(data)sources[url]=data.toString();}));
     plan=createExportPlan(html,{patches,timeline,config,sources});
@@ -60,7 +63,12 @@ export async function deckDocument({read,shared,base='',portable=false}) {
       html=/<head\b/i.test(html)?html.replace(/<head\b[^>]*>/i,m=>m+tag):tag+html;
     }
   }
-  if(!portable){const tag=`<base href="${base}">`;if(/<head\b/i.test(html))return html.replace(/<head\b[^>]*>/i,(m)=>m+tag);if(/<html\b/i.test(html))return html.replace(/<html\b[^>]*>/i,(m)=>m+'<head>'+tag+'</head>');return '<!doctype html><html><head>'+tag+'</head><body>'+html.replace(/<!doctype[^>]*>/gi,'')+'</body></html>';}
+  if (!portable) {
+    const tag = `<base href="${base}">` + projectFontStyle(projectFontCss());
+    if (/<head\b/i.test(html)) return html.replace(/<head\b[^>]*>/i, head => head + tag);
+    if (/<html\b/i.test(html)) return html.replace(/<html\b[^>]*>/i, root => root + '<head>' + tag + '</head>');
+    return '<!doctype html><html><head>' + tag + '</head><body>' + html.replace(/<!doctype[^>]*>/gi, '') + '</body></html>';
+  }
   const asset=async(url,from)=>{const file=resolve(url,from);if(!file)return url;const data=await bytes(file).catch(()=>null);return data?`data:${MIME[path.posix.extname(file)]||'application/octet-stream'};base64,${data.toString('base64')}`:url;};
   const css=async(text,from)=>replaceAsync(text,/url\(\s*(['"]?)([^)'"\s]+)\1\s*\)/gi,async(m)=>{const value=await asset(m[2],from);return value===m[2]?m[0]:`url(${value})`;});
   const mathStyles=new Set(),hoistedStyles=[];
@@ -118,5 +126,19 @@ export async function deckDocument({read,shared,base='',portable=false}) {
     return m[1]+JSON.stringify(await bundle(JSON.parse(m[2]))).replace(/</g,'\\u003c')+m[3];
   });
   if(hoistedStyles.length){const tags=hoistedStyles.join('');html=/<\/head>/i.test(html)?html.replace(/<\/head>/i,()=>tags+'</head>'):tags+html;}
-  return exportManifest(optimizeExportHtml(html.replace(/<base\b[^>]*>/gi,''),plan),plan);
+  html = optimizeExportHtml(html.replace(/<base\b[^>]*>/gi, ''), plan);
+  const fontStyles = [];
+  for (const font of projectFontFacesFor(plan)) {
+    for (const face of font.faces) {
+      let rule = embeddedFonts.get(font.family + ':' + face.weight);
+      if (!rule) {
+        const dataUrl = await asset(face.url, 'index.html');
+        if (dataUrl === face.url) continue;
+        rule = projectFontFace(font, face, dataUrl);
+      }
+      plan.fontFamilies.add(font.family);
+      fontStyles.push(rule);
+    }
+  }
+  return exportManifest(prependProjectFontStyle(html, fontStyles.join('\n'), 'embedded'), plan);
 }

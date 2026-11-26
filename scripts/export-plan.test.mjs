@@ -6,6 +6,7 @@ import {parseHTML} from 'linkedom';
 import {parse} from 'acorn';
 import {createExportPlan,optimizeExportScript,optimizeExportCss} from '../app/js/core/export-plan.js';
 import {deckDocument} from '../server/deck-document.mjs';
+import {PROJECT_FONTS, projectFontCss, projectFontFace, projectFontStyle} from '../app/js/core/project-fonts.js';
 import {createDocuments,asData} from '../app/js/standalone/documents.js';
 
 const full=(body='',head='')=>'<!doctype html><html><head>'+head+'</head><body>'+body+'</body></html>';
@@ -68,6 +69,55 @@ test('Font selection understands shorthand inheritance and retains WOFF2 only',(
   const css=optimizeExportCss(mathCss,plan,{math:true});
   assert(css.includes('main.woff2'));assert(!css.includes('main.woff)'));assert(!css.includes('main.ttf'));
   assert(!css.includes('unused.woff2'));assert(plan.fontFamilies.has('KaTeX_Main'));
+});
+
+const yanbo=PROJECT_FONTS.find(font=>font.family==='wds-font-maoken-yanbo');
+const bitmap=PROJECT_FONTS.find(font=>font.family==='wds-font-boutique-bitmap');
+const fontBytes=Object.fromEntries([yanbo,bitmap].flatMap(font=>font.faces.map(face=>[decodeURIComponent(face.url),Buffer.from(font.family+':'+face.weight)])));
+const readFontFiles = f => async name => fontBytes[name] ? (f.reads.push(name),fontBytes[name]) : f.shared(name);
+const fontReads = f => f.reads.filter(name=>name.startsWith('/app/vendor/project-fonts/')).sort();
+const facePath = (font, weight) => decodeURIComponent(font.faces.find(face=>face.weight===weight).url);
+
+test('Bundled fonts retain only used faces across shorthand, inheritance, SVG and timeline',async()=>{
+  const f=fixture(full(
+    `<div style="font-family:var(--title)"><span style="font-weight:470">正文</span></div>
+    <b>使用系统字体</b>
+    <svg><text font-family="${bitmap.family}" font-weight="700">图注</text></svg>
+    <script id="wpx-timeline" type="application/json">${JSON.stringify({tracks:[
+      {html:'<strong>时间线标题</strong>',selector:'#timeline-title',css:`#timeline-title{font:900 30px ${yanbo.family}}`},
+      {hidden:true,html:`<span style="font:200 30px ${yanbo.family}">隐藏标题</span>`},
+    ]})}</script>`,
+    `<style>:root{--title:${yanbo.family};--unused:wds-font-tsanger-feibai}
+    .unmounted{font:600 28px ${yanbo.family}}</style>`+projectFontStyle(projectFontCss())
+  ));
+  const html=await deckDocument({...f,shared:readFontFiles(f),portable:true});
+  assert.deepEqual(fontReads(f),[facePath(yanbo,400),facePath(yanbo,900),facePath(bitmap,700)].sort());
+  assert.deepEqual(report(html).fonts,[bitmap.family,yanbo.family]);
+});
+
+test('Raw font changes use the final patch and preserve the closest available weight',async()=>{
+  const f=fixture(full('<section class="slide"><h1 style="font-family:wds-font-tsanger-feibai">原稿</h1></section>'),{
+    kind:'raw',patches:[
+      {type:'style',slide:0,path:'0',cssText:`font-family:${bitmap.family};font-weight:400`},
+      {type:'html',slide:0,path:'0',html:'<span style="font-family:inherit !important">新版</span>'},
+      {type:'style',slide:0,path:'0',cssText:`font-family:${yanbo.family} !important;font-weight:550`},
+    ],
+  });
+  await deckDocument({...f,shared:readFontFiles(f),portable:true});
+  assert.deepEqual(fontReads(f),[facePath(yanbo,600)]);
+});
+
+test('Reimported font bundles reuse matching faces, add new weights and drop unused data',async()=>{
+  const oldStyles=projectFontStyle([
+    projectFontFace(yanbo,yanbo.faces.find(face=>face.weight===400),'data:font/ttf;base64,T0xE'),
+    projectFontFace(bitmap,bitmap.faces[0],'data:font/ttf;base64,VU5VU0VE'),
+  ].join('\n'),'embedded');
+  const f=fixture(full(`<p style="font-family:${yanbo.family}">正文<strong>强调</strong></p>`,oldStyles));
+  const html=await deckDocument({...f,shared:readFontFiles(f),portable:true});
+  assert.deepEqual(fontReads(f),[facePath(yanbo,700)]);
+  assert.equal(html.match(/base64,T0xE/g)?.length,1);
+  assert(!html.includes('base64,VU5VU0VE'));
+  assert.equal(html.match(/data:font\/ttf;base64,/g)?.length,2);
 });
 
 test('CSS keyframes are referenced across files and unused definitions are removed',()=>{

@@ -5,6 +5,7 @@ import { bus } from '../core/bus.js';
 import { store } from '../core/store.js';
 import { h, debounce, clamp } from '../core/dom.js';
 import { toast } from '../core/toast.js';
+import { editorProjectFonts } from '../core/project-fonts.js';
 
 const SHADOWS = {
   none: 'none',
@@ -225,7 +226,7 @@ function buildLockRow() {
 /* ---------- 文字 ---------- */
 
 function buildTextGroup(body) {
-  refs.fontFamily = selectInput(FONT_OPTIONS, { onChange: applyFontFamily });
+  refs.fontFamily = selectInput([...FONT_OPTIONS, ...editorProjectFonts().map(font => [font.stack, font.label])], { onChange: applyFontFamily });
   refs.fontSize = numberInput({ min: 6, max: 400, onChange: applyFontSize });
   refs.lineHeight = numberInput({ step: 0.1, min: 0.6, max: 4, onChange: applyLineHeight });
   refs.letterSpacing = numberInput({ step: 0.5, onChange: applyLetterSpacing });
@@ -424,6 +425,9 @@ function lineHeightRatio(value, fontSize) {
 /** 把计算后的 font-family 映射回下拉选项 */
 function fontOptionFor(computed) {
   const raw = String(computed || '');
+  const first = raw.split(',')[0].replace(/["']/g, '').trim().toLowerCase();
+  const projectFont = editorProjectFonts().find(font => font.family === first);
+  if (projectFont) return projectFont.stack;
   /* 具体字体族优先于泛型：否则 SimSun / Microsoft YaHei 会被 serif / sans 先匹配走 */
   const matchers = [
     [/cascadia|consolas|courier|monospace|jetbrains/i, '"Cascadia Code", Consolas, monospace'],

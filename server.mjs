@@ -1,3 +1,5 @@
+import { userInstructionsPatch } from './app/js/core/user-instructions.js';
+import { projectBranches } from './server/project-branches.mjs';
 /**
  * WebDeck Studio · 本地服务
  * Node HTTP 服务：静态资源 + 工程 / 模板 / PPT 导入 + 缩略图 + AI 代理
@@ -11,9 +13,12 @@ import os from 'node:os';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { proxyChat } from './server/agent-proxy.mjs';
+import { createBuiltinBrowser } from './server/builtin-browser.mjs';
+import { BROWSER_PROXY_HEADER } from './server/browser-network.mjs';
 import { readChat, saveChat, listChats } from './server/chat-store.mjs';
 import { withProjectLock, captureVersion, listVersions, inspectVersion, restoreVersion, recoverVersionTransaction, readVersionFile } from './server/version-store.mjs';
 import { deckDocument } from './server/deck-document.mjs';
+import { prependProjectFontStyle, projectFontCss, projectFontStyle } from './app/js/core/project-fonts.js';
 import { templateStore } from './server/templates.mjs';
 import { convertPowerPoint } from './server/powerpoint.mjs';
 import { API_CATALOG } from './app/js/agent/api-catalog.js';
@@ -35,6 +40,7 @@ const DATA_DIR = process.env.WDS_DATA_DIR ? path.resolve(process.env.WDS_DATA_DI
 const WORKSPACE_ID = crypto.createHash('sha256').update([ROOT, DATA_DIR, PROJECTS_DIR].join('\0')).digest('hex').slice(0, 16);
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const favorites = favoriteStore(path.join(DATA_DIR, 'elements'));
+const builtinBrowser = createBuiltinBrowser();
 const MODELS_CACHE_FILE = path.join(DATA_DIR, 'models-dev.json');
 const PORT = Number(process.env.PORT || 4321);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -48,6 +54,7 @@ const sharedDeckFile=async(rel)=>{
   const file=path.resolve(ROOT,'.'+rel);if(!within(ROOT,file))return null;
   return fs.readFile(file).catch(()=>null);
 };
+const localFontCss = projectFontCss();
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
@@ -649,6 +656,7 @@ async function handleSearch(body = {}, draft = null) {
   return { ok: true, provider, query, count: results.length, results };
 }
 async function updateSettings(patch = {}, userInitiated = false) {
+  patch = userInstructionsPatch(patch, userInitiated);
   if (Object.hasOwn(patch, 'imageGeneration') && !userInitiated) throw Object.assign(new Error('生图配置只能由用户在「API 设置 → 生图」中保存，Agent 不可代为开启'), { status: 403 });
   const settings = await getSettings();
   // Validate before writing anything so the three sections are saved together.
@@ -842,6 +850,7 @@ async function buildThumbHtml(id, slideIndex = 0) {
   const title = /<title>([\s\S]*?)<\/title>/i.exec(html)?.[1] || '';
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><base href="/p/${enc(id)}/"><title>${title}</title>
 ${styles}
+${projectFontStyle(localFontCss)}
 <link rel="stylesheet" href="/editor/thumb.css">
 </head><body class="wpx-body wpx-thumb-body">
 <div id="wpx-app" data-w="1920" data-h="1080"><div id="wpx-stage">${slide}</div></div>
@@ -933,7 +942,10 @@ function normalizeModel(id, raw, devEntry) {
   const contextLength = Number(limit.context || info.context_length || raw?.context_length || raw?.context_window || caps.contextLength) || caps.contextLength;
   const maxOutput = Number(limit.output || info.max_output_tokens || raw?.max_output_tokens || raw?.max_completion_tokens || 0) || 0;
   const tools = Boolean(info.tool_call ?? info.toolCall ?? info.tools ?? raw?.tool_call ?? caps.tools);
-  const vision = Boolean(info.modalities?.input?.includes?.('image') ?? info.vision ?? raw?.vision ?? caps.vision);
+  const inputModalities = raw?.input_modalities ?? raw?.modalities?.input ?? raw?.architecture?.input_modalities;
+  const vision = raw?.vision ?? raw?.capabilities?.vision
+    ?? (Array.isArray(inputModalities) ? inputModalities.includes('image') : undefined)
+    ?? info.modalities?.input?.includes?.('image') ?? info.vision ?? (caps.vision || undefined);
   const reasoning = Boolean(info.reasoning ?? raw?.reasoning ?? caps.reasoning);
   const badges = [];
   if (tools) badges.push('工具');
@@ -1119,6 +1131,7 @@ async function serveProjectFile(req, res, id, relPath) {
   const isIndex = path.basename(target).toLowerCase() === 'index.html';  if (isIndex && (wpx === 'edit' || wpx === 'capture')) {
     let html = await fs.readFile(target, 'utf8').catch(() => null);
     if (html == null) return fail(res, 404, '文件不存在');
+    html = prependProjectFontStyle(html, localFontCss);
     html=html.replace(/<script\b[^>]*data-wds-runtime=["'](?:timeline-content|presentation-tools|three|three-bundle)["'][^>]*>[\s\S]*?<\/script>/gi,'');
     const contentRuntime='<script data-wds-runtime="timeline-content" src="/editor/timeline-content.js"></script><script data-wds-runtime="three" src="/editor/three-runtime.js"></script><script data-wds-runtime="type" src="/editor/type-runtime.js"></script>';
     html=/<head\b/i.test(html)?html.replace(/<head\b[^>]*>/i,m=>m+contentRuntime):contentRuntime+html;
@@ -1325,6 +1338,25 @@ const server = http.createServer(async (req, res) => {
       const body = await readJsonBody(req);
       return json(res, 200, await handleSearch(body));
     }
+    if (pathname === '/api/browser' && method === 'POST') {
+      const authority = new URL('http://' + req.headers.host);
+      const local = ['127.0.0.1', 'localhost', '[::1]'];
+      if (req.headers[BROWSER_PROXY_HEADER] || !local.includes(authority.hostname) || !['127.0.0.1', '::ffff:127.0.0.1', '::1'].includes(req.socket.remoteAddress) ||
+          (req.headers.origin && req.headers.origin !== authority.origin) || req.headers['sec-fetch-site'] === 'cross-site') {
+        return fail(res, 403, '内置浏览器仅供本机工作台使用。');
+      }
+      const { projectId = null, sessionId = 'default', ...body } = await readJsonBody(req, 16000);
+      if ((projectId !== null && (typeof projectId !== 'string' || projectId.length > 256)) ||
+          typeof sessionId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(sessionId)) return fail(res, 400, '浏览器会话无效。');
+      const controller = new AbortController();
+      const disconnect = () => { if (!res.writableEnded) controller.abort(); };
+      res.on('close', disconnect);
+      try {
+        const result = await builtinBrowser.operate(JSON.stringify([projectId, sessionId]), body, controller.signal);
+        if (!res.destroyed) return json(res, 200, result);
+      } finally { res.off('close', disconnect); }
+      return;
+    }
 
     /* ---------- 工程子路由 ---------- */
     const m = /^\/api\/projects\/([^/]+)(\/.*)?$/.exec(pathname);
@@ -1335,6 +1367,14 @@ const server = http.createServer(async (req, res) => {
       return await withProjectLock(dir, async () => {
       if (!(await exists(dir))) return fail(res, 404, '工程不存在');
       await recoverVersionTransaction(dir);
+      const branches = projectBranches(dir, id);
+      await branches.recover();
+      if (sub === '/branches' && method === 'GET') return json(res, 200, await branches.list());
+      if (['/branches', '/branches/switch', '/branches/rewind', '/branches/rename'].includes(sub) && method === 'POST') {
+        const body = await readJsonBody(req);
+        const result = await branches[sub === '/branches' ? 'fork' : sub.split('/').at(-1)](body);
+        return json(res, 200, { ...result, project: await readProject(id) });
+      }
       if (sub === '/generate-image' && method === 'POST') {
         const body = await readJsonBody(req, 100000), settings = await getSettings();
         const controller = new AbortController();
@@ -1534,4 +1574,8 @@ server.listen(PORT, HOST, () => {
   log(`WebDeck Studio 已启动 → http://${HOST}:${PORT}`);
   log(`工程目录: ${PROJECTS_DIR}`);
 });
-process.on('SIGINT', () => { cloud.manager.stopScheduler(); log('正在关闭…'); server.close(() => process.exit(0)); });
+process.on('SIGINT', () => {
+  cloud.manager.stopScheduler();
+  log('正在关闭…');
+  void builtinBrowser.close().finally(() => server.close(() => process.exit(0)));
+});

@@ -6,6 +6,33 @@
    ========================================================================== */
 
 export const ACCEPT = 'image/*,.pdf,.docx,.ppt,.pptx,.txt,.md,.csv,.json';
+const IMAGE_PREVIEW_BYTES = 420000; // data URL characters; keeps screenshots under common request limits
+
+export async function imageForChat(file, dataUrl) {
+  const supported = /^data:image\/(?:png|jpeg|gif|webp);base64,/i.test(dataUrl);
+  if (supported && dataUrl.length <= IMAGE_PREVIEW_BYTES) return dataUrl;
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    let scale = Math.min(1, 2400 / Math.max(image.naturalWidth, image.naturalHeight));
+    for (let attempt = 0; attempt < 5; attempt++) {
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      const preview = canvas.toDataURL('image/jpeg', .86);
+      if (preview.length <= IMAGE_PREVIEW_BYTES || attempt === 4) return preview;
+      scale *= .75;
+    }
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 const MAX_PDF_PAGES = 30;
 const MAX_SCAN_IMAGES = 4;
 
@@ -204,4 +231,41 @@ export function summaryOf(att) {
   }
   if (att.scanned) bits.push(att.scanned + ' 张扫描页');
   return bits.join(' · ');
+}
+
+export function restoreDraftFiles(message) {
+  const { images = [], docs = [], assetPaths = [], attachmentLayout = [] } = message;
+  const usedImages = new Set(), usedDocs = new Set(), usedPaths = new Set();
+  const files = [];
+
+  function addImage(index, name, pathIndex) {
+    if (!images[index] || usedImages.has(index)) return;
+    usedImages.add(index);
+    const assetPath = assetPaths[pathIndex];
+    if (assetPath) usedPaths.add(pathIndex);
+    const mime = /^data:image\/([a-z0-9]+)/i.exec(images[index])?.[1];
+    files.push({ name: name || assetPath?.split('/').at(-1) || `附件图片 ${index + 1}.${mime || 'png'}`,
+      status: 'ready', kind: '图片', image: images[index], assetPath });
+  }
+
+  function addDocument(index, scanStart, scanCount) {
+    if (!docs[index] || usedDocs.has(index)) return;
+    usedDocs.add(index);
+    const scanImages = images.slice(scanStart, scanStart + scanCount);
+    scanImages.forEach((_, offset) => usedImages.add(scanStart + offset));
+    files.push({ ...docs[index], status: 'ready', kind: 'doc', scanImages });
+  }
+
+  for (const item of attachmentLayout) {
+    if (item.docIndex !== undefined) addDocument(item.docIndex, item.scanStart, item.scanCount);
+    else addImage(item.imageIndex, item.name, item.pathIndex);
+  }
+  // Older messages saved the payload without recording which images came from
+  // a scanned document. Preserve those previews in their original order.
+  docs.forEach((_, index) => addDocument(index, 0, 0));
+  images.forEach((_, index) => addImage(index, '', images.length === assetPaths.length ? index : undefined));
+  assetPaths.forEach((assetPath, index) => {
+    if (assetPath && !usedPaths.has(index)) files.push({ name: assetPath.split('/').at(-1), status: 'ready', kind: '图片素材', assetPath });
+  });
+  return files;
 }

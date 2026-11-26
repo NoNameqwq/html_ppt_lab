@@ -19,6 +19,7 @@ export function createVersionHistory(ctx, { getLoop, onRestored }) {
     const data = editor?.projectId === projectId && editor.withVersionCheckpoint ? await editor.withVersionCheckpoint(inspect) : await inspect();
     const v = data.version, checkbox = h('input', { type: 'checkbox' });
     checkbox.checked = rewind && v.hasConversation;
+    checkbox.disabled = rewind;
     const list = h('div', { class: 'agw-version-changes' });
     for (const file of data.changes) list.append(h('div', { class: 'agw-version-change', 'data-action': file.action },
       h('span', {}, { restore: '+', replace: '~', remove: '−' }[file.action]), h('code', {}, file.path),
@@ -28,7 +29,7 @@ export function createVersionHistory(ctx, { getLoop, onRestored }) {
       h('p', { class: 'agw-version-meta' }, `${time(v.createdAt)} · ${kinds[v.kind]} · ${v.fileCount} 个文件 · ${size(v.bytes)}`),
       h('p', {}, v.kind === 'legacy' ? '旧备份只包含 index.html。素材、补丁和对话无法从旧备份恢复。' : '恢复源代码、页面、素材、原稿补丁及编辑历史；此版本之后新增的工程文件将被移除。'),
       h('div', { class: 'agw-version-change-title' }, `相对当前工程 · ${data.changes.length} 个文件变化`), list,
-      v.hasConversation ? h('label', { class: 'agw-version-rewind' }, checkbox, h('span', {}, '同步回退对话', h('small', {}, '后续消息自动保存为历史分支，可在「对话历史」重新打开。'))) : null,
+      v.hasConversation ? h('label', { class: 'agw-version-rewind' }, checkbox, h('span', {}, '同步回溯对话', h('small', {}, '删除当前分支在此之后的消息。需要保留另一种方案时，请先创建分支。'))) : null,
       h('p', { class: 'agw-version-hint' }, '回退前会自动保存当前工程为一个新版本，可随时恢复。'));
     let restoring = false;
     return ctx.dialog.open({ title: '恢复工程版本', sub: '确认恢复范围后回退', body, width: 'lg', className: 'agw-version-modal', closeOnBackdrop: false,
@@ -38,10 +39,16 @@ export function createVersionHistory(ctx, { getLoop, onRestored }) {
         const button = modal.querySelector('.modal-foot .btn--primary'); button.disabled = true; button.textContent = '正在恢复…';
         try {
           if (getLoop().projectId !== projectId) throw new Error('当前工程已切换，请重新打开版本历史');
+          const draft = checkbox.checked && v.conversation?.phase === 'before'
+            ? loop.messages.find(message => message.role === 'user' &&
+              (message.turnId === v.conversation.turnId || message.versions?.[projectId]?.before === id))
+            : null;
           const result = await loop.restoreCheckpoint(id, { rewindConversation: checkbox.checked });
-          onRestored?.(result); ctx.toast.ok(result.conversation ? '工程与对话已回退，后续消息已保留为历史分支' : '工程已恢复，回退前版本已自动备份');
+          if (result.conversationError) ctx.toast.warn(result.conversationError);
+          else ctx.toast.ok(result.conversation ? '项目与对话已回溯，后续消息已从当前分支删除' : '工程已恢复，回退前版本已自动备份');
           if (result.editorError) ctx.toast.warn(result.editorError);
           finish(result);
+          onRestored?.(result, result.conversation ? draft : null);
         } catch (e) { fail(e); restoring = false; button.disabled = false; button.textContent = '恢复此版本'; }
         return false;
       } }] });

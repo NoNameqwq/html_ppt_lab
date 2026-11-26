@@ -59,12 +59,20 @@ export function createExportPlan(html,{patches=[],timeline=null,config={},source
   const {document}=parseHTML(html),effects=new Set(),transitions=new Set(['fade']),overlays=new Set();
   const plan={version:1,effects,transitions,overlays,three:false,math:false,timeline:false,timelineContent:false,typeset:false,
     dynamicEffects:false,dynamicTransitions:false,dynamicCss:false,dynamicThree:false,dynamicTimeline:false,
-    warnings:[],fontFamilies:new Set(),removed:[],sourceBytes:new TextEncoder().encode(html).length};
+    warnings:[],fontFamilies:new Set(),fontStylesheets:new Set(),fontPatchStyles:[],fontScriptRefs:new Set(),
+    dynamicFontWeights:false,dynamicFontSelectors:false,removed:[],sourceBytes:new TextEncoder().encode(html).length};
   const analysis=document.cloneNode(true);
+  const fontDocument=document.cloneNode(true);
+  const rawSlides=[...new Set(['#stage > .slide','.slide','[data-slide]'].flatMap(selector=>[...fontDocument.querySelectorAll(selector)]))];
+  if(!rawSlides.length)rawSlides.push(...fontDocument.querySelectorAll('#stage > section, #app section'));
+  const fontSlides=rawSlides.filter(slide=>!rawSlides.some(other=>other!==slide&&other.contains(slide)));
   analysis.querySelectorAll('script').forEach(n=>{if(managedScriptKind(n))n.remove();});
-  function conservative(reason){plan.dynamicEffects=plan.dynamicTransitions=plan.dynamicCss=plan.dynamicThree=plan.dynamicTimeline=true;plan.warnings.push(reason);}
+  function conservative(reason){plan.dynamicEffects=plan.dynamicTransitions=plan.dynamicCss=plan.dynamicThree=plan.dynamicTimeline=true;plan.dynamicFontWeights=plan.dynamicFontSelectors=true;plan.warnings.push(reason);}
   let fragmentCount=0;
   function userCode(code) {
+    for(const name of code.match(/wds-font-[a-z0-9-]+/gi)||[])plan.fontScriptRefs.add(name.toLowerCase());
+    if(/fontWeight|font-weight|\.font\b|cssText|insertRule|replaceSync/.test(code))plan.dynamicFontWeights=true;
+    if(/classList|className|setAttribute|createElement|innerHTML|outerHTML|insertAdjacentHTML/.test(code))plan.dynamicFontSelectors=true;
     let tree;try{tree=ast(code);}catch{try{tree=parseJS(code,{ecmaVersion:'latest',sourceType:'module'});}catch{conservative('Unparsed custom script: dependent features retained.');return;}}
     walk(tree,n=>{
       if(n.type==='Identifier'&&n.name==='THREE')plan.three=true;
@@ -109,11 +117,28 @@ export function createExportPlan(html,{patches=[],timeline=null,config={},source
     });
   }
   plan.styleText='';
-  function fragment(markup) {
+  function fragment(markup, detachedFonts = true) {
     if(++fragmentCount>2000){conservative('Nested generated markup limit: dependent features retained.');return;}
     const {document:part}=parseHTML('<html><body>'+markup+'</body></html>');
     inspect(part);
-    for(const child of [...part.body.childNodes])analysis.body?.appendChild(child.cloneNode(true));
+    for(const child of [...part.body.childNodes]){
+      analysis.body?.appendChild(child.cloneNode(true));
+      if(detachedFonts)fontDocument.body?.appendChild(child.cloneNode(true));
+    }
+  }
+  function timelineFonts(track) {
+    const part=parseHTML('<html><body>'+track.html+'</body></html>').document;
+    part.querySelectorAll('script,iframe,object,embed').forEach(node=>node.remove());
+    const element=part.body.children.length===1?part.body.firstElementChild:part.body;
+    const selector=String(track.selector||'');
+    const marker=/data-wpx-tl\s*=\s*["']([^"']+)["']/.exec(selector);
+    const node=element===part.body?fontDocument.createElement('div'):element.cloneNode(true);
+    if(element===part.body)node.innerHTML=element.innerHTML;
+    if(marker)node.setAttribute('data-wpx-tl',marker[1]);
+    else if(/^#[\w-]+$/.test(selector))node.id=selector.slice(1);
+    else if(/^\.[\w-]+$/.test(selector))node.classList.add(selector.slice(1));
+    node.setAttribute('data-wpx-timeline-layer',track.id||'effect');
+    (fontDocument.querySelector('#wpx-stage,#stage')||fontDocument.body)?.appendChild(node);
   }
   function inspect(doc) {
     if(doc.querySelector('[data-wds-three]'))plan.three=true;
@@ -123,7 +148,10 @@ export function createExportPlan(html,{patches=[],timeline=null,config={},source
     doc.querySelectorAll('[data-transition]').forEach(n=>transitions.add(n.getAttribute('data-transition')));
     doc.querySelectorAll('[data-wpx-tr-fx]').forEach(n=>overlays.add(n.getAttribute('data-wpx-tr-fx')));
     doc.querySelectorAll('[data-wpx-action]').forEach(n=>{const value=n.getAttribute('data-wpx-action');if(value.startsWith('js:'))userCode(value.slice(3));});
-    doc.querySelectorAll('style').forEach(n=>plan.styleText+='\n'+n.textContent);
+    doc.querySelectorAll('style').forEach(n=>{
+      if(n.hasAttribute('data-wds-project-fonts'))return;
+      plan.styleText+='\n'+n.textContent;
+    });
     doc.querySelectorAll('link[rel="stylesheet"][href]').forEach(n=>{const code=sources[n.getAttribute('href')];if(code)plan.styleText+='\n'+code;else plan.dynamicCss=true;});
     doc.querySelectorAll('[style]').forEach(n=>plan.styleText+='\n'+n.getAttribute('style'));
     doc.querySelectorAll('script').forEach(n=>{
@@ -137,9 +165,44 @@ export function createExportPlan(html,{patches=[],timeline=null,config={},source
     });
     doc.querySelectorAll('*').forEach(n=>{for(const a of n.attributes||[])if(/^on/i.test(a.name)&&a.value)userCode(a.value);});
   }
+  function applyFontPatch(p) {
+    let target=fontSlides[p.slide];
+    if(!target)return false;
+    for(const index of String(p.path??'').split('.').filter(Boolean))target=target?.children[Number(index)];
+    if(!target)return false;
+    switch(p.type){
+      case 'html': target.innerHTML=p.html||''; return true;
+      case 'style': if(p.cssText)target.setAttribute('style',p.cssText);else target.removeAttribute('style');return true;
+      case 'attr':
+        for(const [key,value] of Object.entries(p.attrs||{})){
+          if(value==null)target.removeAttribute(key);else target.setAttribute(key,value);
+        }
+        return true;
+      case 'insert':
+      case 'slide-html': {
+        const wrapper=fontDocument.createElement('div');
+        wrapper.innerHTML=p.html||'';
+        const node=wrapper.firstElementChild;
+        if(!node)return false;
+        if(p.type==='insert')target.insertBefore(node,target.children[p.index]||null);
+        else target.innerHTML=node.innerHTML;
+        return true;
+      }
+      case 'delete': target.remove();return true;
+      default: return false;
+    }
+  }
   function patchData(p){
-    if(p.html)fragment(p.html);
+    const applied=applyFontPatch(p);
+    if(p.html)fragment(p.html,!applied);
     if(p.css||p.cssText)plan.styleText+='\n'+(p.css||p.cssText);
+    if(p.type==='css')plan.fontPatchCss=p.css||'';
+    else if(p.css)plan.fontStylesheets.add(p.css);
+    if(!applied&&(p.cssText||p.attrs?.style||p.attrs?.['font-family']||p.attrs?.['font-weight']||p.attrs?.face||p.style)){
+      const style=p.style?Object.entries(p.style).map(([k,v])=>k.replace(/[A-Z]/g,c=>'-'+c.toLowerCase())+':'+v).join(';'):'';
+      plan.fontPatchStyles.push([p.cssText,p.attrs?.style,p.attrs?.['font-family']&&'font-family:'+p.attrs['font-family'],p.attrs?.['font-weight']&&'font-weight:'+p.attrs['font-weight'],p.attrs?.face&&'font-family:'+p.attrs.face,style].filter(Boolean).join(';'));
+    }
+    if(!applied&&p.attrs?.class)plan.dynamicFontSelectors=true;
     if(p.js)userCode(p.js);
     for(const [key,value] of Object.entries(p.attrs||{})){
       if(key==='data-wpx-anim'&&value)effects.add(String(value));
@@ -154,13 +217,23 @@ export function createExportPlan(html,{patches=[],timeline=null,config={},source
   }
   function timelineData(value){
     if(value.tracks?.some(t=>!t.hidden)||value.pages?.length)plan.timeline=true;
-    for(const t of value.tracks||[])if(!t.hidden){if(t.html){plan.timelineContent=true;fragment(t.html);}if(t.css)plan.styleText+='\n'+t.css;}
+    for(const t of value.tracks||[])if(!t.hidden){
+      if(t.html){plan.timelineContent=true;fragment(t.html,false);timelineFonts(t);}
+      if(t.css){plan.styleText+='\n'+t.css;plan.fontStylesheets.add(t.css);}
+    }
   }
   function configData(value){for(const name of Object.values(value.transitionFx||{}))if(name&&name!=='none')overlays.add(name);}
   inspect(document);patches.forEach(patchData);if(timeline)timelineData(timeline);configData(config);
+  if(plan.fontPatchCss)plan.fontStylesheets.add(plan.fontPatchCss);
+  fontDocument.querySelectorAll('style:not([data-wds-project-fonts])').forEach(n=>plan.fontStylesheets.add(n.textContent));
+  fontDocument.querySelectorAll('link[rel="stylesheet"][href]').forEach(n=>{
+    const code=sources[n.getAttribute('href')];
+    if(code)plan.fontStylesheets.add(code);
+  });
   plan.three ||= plan.dynamicThree;plan.timeline ||= plan.dynamicTimeline;plan.timelineContent ||= plan.dynamicTimeline;
   plan.math ||= plan.dynamicCss;plan.webRuntime=effects.size>0||overlays.size>0||plan.dynamicEffects||plan.dynamicTransitions;
   Object.defineProperty(plan,'document',{value:analysis});
+  Object.defineProperty(plan,'fontDocument',{value:fontDocument});
   return plan;
 }
 

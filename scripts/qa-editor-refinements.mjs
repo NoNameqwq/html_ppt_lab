@@ -137,6 +137,27 @@ try {
     await command('app.undo');assert.equal(await ev(`${V}.getComputedStyle(${D}.querySelector('[data-wpx-el="cover-title"] span')).fontSize`),'24px');
     await command('app.redo');assert.equal(await ev(`${V}.getComputedStyle(${D}.querySelector('[data-wpx-el="cover-title"] span')).fontSize`),'160px');
   });
+  await step('整段换字体覆盖嵌套样式，局部换字体保留其它文字及撤销记录',async()=>{
+    const node=`${D}.querySelector('[data-wpx-el="cover-title"]')`;
+    const family='wds-font-ma-shan-zheng';
+    await ev(`${B}.call('setElementHtml',{elementId:'cover-title',html:'<font face="serif"><span style="font-family:monospace !important">山河</span>如画</font>'})`);
+    await ev(`${B}.select('cover-title')`);
+    await command('text.fontFamily',{family:`"${family}","马善政毛笔楷书",serif`});
+    assert.match(await ev(`${V}.getComputedStyle(${node}.querySelector('span')).fontFamily`),/^wds-font-ma-shan-zheng/);
+    assert(await ev(`${D}.fonts.load('64px ${family}','山河如画').then(fonts=>fonts.some(font=>font.status==='loaded'))`));
+    await command('app.undo');
+    assert.equal(await ev(`${V}.getComputedStyle(${node}.querySelector('span')).fontFamily`),'monospace');
+    await ev(`${B}.beginTextEdit('cover-title')`);
+    await ev(`(()=>{const r=${D}.createRange(),text=${node}.querySelector('span').firstChild;r.setStart(text,0);r.setEnd(text,1);${V}.getSelection().removeAllRanges();${V}.getSelection().addRange(r)})()`);
+    await sleep(80);
+    await command('text.fontFamily',{family:'var(--wpx-serif)'});
+    assert.equal(await ev(`${node}.querySelector('span span').style.fontFamily`),'var(--wpx-serif)');
+    assert.equal(await ev(`${node}.querySelector('span').lastChild.textContent`),'河');
+    assert.equal(await ev(`${V}.getSelection().toString()`),'山');
+    await command('app.undo');
+    assert.equal(await ev(`${node}.querySelector('span').innerHTML`),'山河');
+    await ev(`${B}.endTextEdit()`);
+  });
   await step('文字局部选区使用真实像素，键盘 Ctrl Z 可撤销且不损坏其它文字',async()=>{
     await ev(`${B}.call('setElementHtml',{elementId:'cover-title',html:'前半后半'})`);
     await ev(`${B}.beginTextEdit('cover-title')`);
@@ -265,7 +286,7 @@ try {
     assert(present.slide);assert.equal(present.slideDisplay,'block');assert.equal(present.slideVisibility,'visible');assert.equal(present.slideOpacity,'1');assert.equal(present.canvasDisplay,'block');assert.equal(present.canvasVisibility,'visible');assert.equal(present.canvasOpacity,'1');assert(present.stageWidth>0);
     await ev(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`);
   });
-  await step('原稿模式字号撤销在保存后仍有效，时间线支持自定义 SVG',async()=>{
+  await step('原稿模式字体与字号可撤销和保存，时间线支持自定义 SVG',async()=>{
     const content='<!doctype html><html><head><style>body{margin:0;background:#eee}.slide{position:absolute;width:100vw;height:100vh}.slide:not(.active){display:none}h1{font-size:30px}#stage{position:relative;width:100vw;height:100vh}</style></head><body><div id="stage"><section class="slide active"><h1><span style="font-size:20px">原稿标题</span></h1></section><section class="slide"><h1>第二页</h1></section></div><script>document.addEventListener("keydown",e=>{if(e.key==="ArrowRight"||e.key==="ArrowLeft"){document.querySelectorAll(".slide").forEach(x=>x.classList.toggle("active"));location.hash=document.querySelector(".slide.active")===document.querySelector(".slide")?"1":"2";}})</script></body></html>';
     const raw=(await json(base,'/api/projects/import',{name:'Refined raw',fileName:'raw.html',content,mode:'raw'})).project;
     await ev(`${W}.navigate('#/p/'+${JSON.stringify(raw.id)})`);await ready();
@@ -274,10 +295,17 @@ try {
     assert.equal(await ev(`${V}.getComputedStyle(${D}.querySelector('h1 span')).fontSize`),'180px');await ev(`${E}.saveNow({reason:'qa'})`);
     await command('app.undo');assert.equal(await ev(`${V}.getComputedStyle(${D}.querySelector('h1 span')).fontSize`),'20px');
     await command('app.redo');await ev(`${E}.saveNow({reason:'qa'})`);
+    const family='wds-font-boutique-bitmap';
+    await command('text.fontFamily',{family});
+    assert.equal(await ev(`${V}.getComputedStyle(${D}.querySelector('h1 span')).fontFamily`),family);
+    await command('app.undo');
+    assert.notEqual(await ev(`${V}.getComputedStyle(${D}.querySelector('h1 span')).fontFamily`),family);
+    await command('app.redo');await ev(`${E}.saveNow({reason:'qa'})`);
     assert((await exec('deck_set_timeline',{timeline:{version:2,duration:3200,pages:[{index:0,start:0,duration:1600},{index:1,start:1600,duration:1600}],tracks:[custom]}})).ok);
     const capture=await exec('deck_capture_slide',{scale:.5});assert(capture.ok,JSON.stringify(capture));assert(capture.visual.elements.some(e=>e.elementId===id));
     assert(await ev(`!!${D}.querySelector('[data-wpx-tl="ai-svg"] svg')`));await ev(`${E}.saveNow({reason:'qa'})`);
     rawHtml=await (await fetch(base+'/api/projects/'+raw.id+'/export')).text();assert(rawHtml.includes('AI_EFFECT'));
+    assert.equal(rawHtml.match(/data:font\/ttf;base64,/g)?.length,1);
   });
   const drawStroke=async(x,y,dx=140,dy=50,touch=false)=>{
     if(touch){await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y,radiusX:2,radiusY:2,force:.6}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+dx,y:y+dy,radiusX:2,radiusY:2,force:.6}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}

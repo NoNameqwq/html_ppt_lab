@@ -10,6 +10,8 @@
  * 这个模块不触碰 DOM，可在浏览器、Agent 工具与 Node 测试中复用。
  */
 
+import { PROJECT_FONTS, editorProjectFonts } from './project-fonts.js';
+
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ESC[c]);
 const clamp = (v, min, max) => Math.min(max, Math.max(min, v));
@@ -39,11 +41,14 @@ export const TYPE_FONTS = {
   caiyun: { label: '彩云', stack: '"STCaiyun","华文彩云","Microsoft YaHei",sans-serif' },
   serif: { label: '衬线', stack: 'Georgia,"Times New Roman","Songti SC",serif' },
   sans: { label: '无衬线', stack: 'Inter,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif' },
+  ...Object.fromEntries(editorProjectFonts().map(font => [font.family, font])),
 };
 
 export function fontStack(key) {
   if (!key) return TYPE_FONTS.sans.stack;
   if (TYPE_FONTS[key]) return TYPE_FONTS[key].stack;
+  const bundled = PROJECT_FONTS.find(font => font.family === key);
+  if (bundled) return bundled.stack;
   return /[,"'\s]/.test(String(key)) ? String(key) : `"${String(key)}"`;
 }
 

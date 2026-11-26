@@ -1,3 +1,4 @@
+import { createUserInstructionsForm } from './user-instructions.js';
 /* AI 设置（Codex 风格）：Provider 分页 / 高级设置折叠 / 技能管理 */
 
 import { h } from '../core/dom.js';
@@ -269,9 +270,11 @@ export async function openSettings(ctx, opts = {}) {
   const imageForm = createImageSettingsForm(ctx, snap.settings.imageGeneration);
   let davData,davError='';try{davData=await ctx.api.getWebDAV();}catch(e){davError='WebDAV 设置不可用：'+e.message;}
   const davForm=createWebDAVForm(ctx,davData,davError);
+  const instructionsForm = createUserInstructionsForm(snap.settings.agent?.userInstructions);
   const sections = { chat: chatSection,
     search: h('div', { class: 'ais-section', role: 'tabpanel', id: 'ais-section-search', 'aria-labelledby': 'ais-nav-search' }, searchForm.el),
     image: h('div', { class: 'ais-section', role: 'tabpanel', id: 'ais-section-image', 'aria-labelledby': 'ais-nav-image' }, imageForm.el),
+    instructions: h('div', { class: 'ais-section', role: 'tabpanel', id: 'ais-section-instructions', 'aria-labelledby': 'ais-nav-instructions' }, instructionsForm.el),
     backup: h('div',{class:'ais-section',role:'tabpanel',id:'ais-section-backup','aria-labelledby':'ais-nav-backup'},davForm.el) };
   const tabsEl = h('div', { class: 'ais-tabs', role: 'tablist' });
   const paneEl = h('div', { class: 'ais-pane', role: 'tabpanel' });
@@ -287,7 +290,7 @@ export async function openSettings(ctx, opts = {}) {
     if (id === 'image') imageForm.activate();
     if (id === 'backup') davForm.activate();
   }
-  for (const [id, name, glyph] of [['chat','对话模型','message'], ['search','联网搜索','globe'], ['image','生图','image'],['backup','云端备份','cloud']]) {
+  for (const [id, name, glyph] of [['chat','对话模型','message'], ['search','联网搜索','globe'], ['image','生图','image'],['backup','云端备份','cloud'],['instructions','指令与 Skill','sparkles']]) {
     const button = h('button', { type: 'button', role: 'tab', id: 'ais-nav-' + id, class: 'ais-section-tab', 'data-section': id, 'aria-controls': 'ais-section-' + id, onClick: () => selectSection(id) }, h('span', { html: icon(glyph, 16) }), name);
     nav.push(button); sectionTabs.append(button);
   }
@@ -618,6 +621,7 @@ export async function openSettings(ctx, opts = {}) {
     const skillBtn = h('button', { type: 'button', class: 'btn btn--sm' }, '技能管理');
     skillBtn.addEventListener('click', () => {
       openManager(ctx, {
+        onUserInstructions: () => selectSection('instructions'),
         catalog,
         enabled: typeof opts.getSkills === 'function' ? (opts.getSkills() || []) : [],
         onChange: (ids) => {
@@ -661,6 +665,7 @@ export async function openSettings(ctx, opts = {}) {
         streaming: draft.more.streaming,
         collaboration:collaborationForm.getValue(),
         compaction: compactionForm.getValue(),
+        userInstructions: instructionsForm.getValue(),
       },
       ui: { ...((ctx.store.get().settings && ctx.store.get().settings.ui) || {}) },
     };
@@ -693,7 +698,7 @@ export async function openSettings(ctx, opts = {}) {
   let saving = false;
   const result = await ctx.dialog.open({
     title: 'API 设置',
-    sub: serverOk ? '模型、搜索、生图与云端备份，统一管理' : '设置接口未就绪，保存可能失败',
+    sub: serverOk ? '模型、搜索、生图、备份与自定义指令，统一管理' : '设置接口未就绪，保存可能失败',
     width: 'lg',
     className: 'ais-dialog',
     body,

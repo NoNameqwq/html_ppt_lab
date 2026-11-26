@@ -10,10 +10,13 @@
     "launch": "node scripts/start.mjs",
     "build:static": "node scripts/build-static.mjs",
     "qa:static": "node scripts/qa-standalone.mjs",
+    "test:instructions": "node --test scripts/user-instructions.test.mjs",
+    "test:branches": "node --test scripts/project-branches.test.mjs",
     "test:launcher": "node --test scripts/launcher.test.mjs",
     "dev": "node server.mjs",
     "qa": "node scripts/qa.mjs",
     "test:agent": "node --test scripts/agent-runtime.test.mjs scripts/version-store.test.mjs",
+    "test:browser": "node --test scripts/builtin-browser.test.mjs",
     "test:authoring": "node --test scripts/authoring.test.mjs scripts/image-generation.test.mjs",
     "qa:agent": "node scripts/qa-agent-workspace.mjs",
     "qa:authoring": "node scripts/qa-authoring-features.mjs",
@@ -41,6 +44,7 @@
     "jszip": "^3.10.1",
     "katex": "^0.19.1",
     "linkedom": "^0.18.15",
+    "playwright-core": "1.65.1",
     "three": "^0.181.1"
   },
   "devDependencies": {

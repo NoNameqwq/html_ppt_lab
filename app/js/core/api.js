@@ -42,6 +42,7 @@ async function request(path, { method = 'GET', body, headers = {}, raw = false, 
 const enc = encodeURIComponent;
 
 export const api = {
+  browser: (body, signal) => request('/api/browser', { method: 'POST', body, signal }),
   getWebDAV:()=>request('/api/webdav/config'),
   putWebDAV:body=>request('/api/webdav/config',{method:'PUT',body}),
   testWebDAV:body=>request('/api/webdav/test',{method:'POST',body}),
@@ -77,6 +78,11 @@ export const api = {
   getChat: (id, session = 'default') => request((id ? '/api/projects/' + enc(id) : '/api/workspace') + '/chat?session=' + enc(session)),
   putChat: (id, payload, session = 'default') => request((id ? '/api/projects/' + enc(id) : '/api/workspace') + '/chat?session=' + enc(session), { method: 'PUT', body: payload }),
   listChats: (id) => request((id ? '/api/projects/' + enc(id) : '/api/workspace') + '/chats'),
+  listProjectBranches: id => request('/api/projects/' + enc(id) + '/branches'),
+  forkProjectBranch: (id, body) => request('/api/projects/' + enc(id) + '/branches', { method: 'POST', body }),
+  switchProjectBranch: (id, body) => request('/api/projects/' + enc(id) + '/branches/switch', { method: 'POST', body }),
+  rewindProjectBranch: (id, body) => request('/api/projects/' + enc(id) + '/branches/rewind', { method: 'POST', body }),
+  renameProjectBranch: (id, body) => request('/api/projects/' + enc(id) + '/branches/rename', { method: 'POST', body }),
   listVersions: (id) => request('/api/projects/' + enc(id) + '/versions'),
   createVersion: (id, body) => request('/api/projects/' + enc(id) + '/versions', { method: 'POST', body }),
   inspectVersion: (id, version) => request('/api/projects/' + enc(id) + '/versions/' + enc(version)),

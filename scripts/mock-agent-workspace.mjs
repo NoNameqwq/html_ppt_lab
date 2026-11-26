@@ -42,6 +42,12 @@ http.createServer(async (req, res) => {
   if (userText.includes('ERROR401')) { res.writeHead(401, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: { message: '模拟密钥错误' } })); return; }
   const send = (delta, finish = null) => res.write('data: ' + JSON.stringify({ choices: [{ index: 0, delta, finish_reason: finish }] }) + '\n\n');
   const done = (reason = 'stop') => { send({}, reason); res.write('data: [DONE]\n\n'); res.end(); };
+  if (userText.includes('PASTE_IMAGE_QA')) {
+    const image = Array.isArray(user.content) && user.content.find(block => block.type === 'image_url');
+    send({ content: image?.image_url?.url?.startsWith('data:image/png;base64,iVBOR') ? '上游已收到实际图片' : '上游没有收到图片' });
+    done();
+    return;
+  }
   if (userText === '请只回复 OK') { send({ content: 'OK' }); done(); return; }
   const emitCalls = async (list) => {
     for (let i = 0; i < list.length; i++) {
@@ -153,7 +159,7 @@ http.createServer(async (req, res) => {
   }
   if (userText.includes('IMAGE_INSERT_TEST')) {
     if (!current.some((m) => m.role === 'tool')) await emitCalls([call('image-insert-'+n,'deck_generate_image',{prompt:'知识花园中的一片叶子，柔和自然，右侧构图，留白',size:'1536x1024',quality:'high',background:'transparent',outputFormat:'webp',outputCompression:85,index:2,x:1450,y:700,w:240,h:200})]);
-    else { send({content:'已生成配图并保存为本地素材，放入第三页。'}); done(); } return;
+    else { send({content:'已生成配图并保存到当前对话素材目录，尚未插入页面。'}); done(); } return;
   }
   if(userText.includes('RICH_TEST')){
     const answer=String.raw`公式 $E=mc^2$，其中质量为 $m$。

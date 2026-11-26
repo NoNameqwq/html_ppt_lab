@@ -176,6 +176,31 @@ try {
     await until(() => ev(`!${L}.streaming && ${L}.messages.at(-1)?.content?.includes('收到你的补充')`), '排队消息完成');
     assert.equal(await ev(`document.querySelectorAll('.agw-queued').length`), 0);
   });
+  await step('插队发送停止当前任务，保留附件和其他排队消息的顺序', async () => {
+    const running = 'STOP_TEST 插队前的生成';
+    const first = 'FOLLOWUP 原队首';
+    const priority = 'FOLLOWUP 插队消息';
+    const last = 'FOLLOWUP 原队尾';
+    await input(running);
+    await until(() => ev(`${L}.streaming && document.querySelector('.agw-turn:last-child').textContent.includes('停止测试')`), '可中断的生成');
+    await input(first);
+    const payload = { text: priority, docs: [{ name: '插队附件.txt', text: '随消息发送的附件' }] };
+    await ev(`window.__WDS__.bus.runCommand('agent.send', ${JSON.stringify(payload)})`);
+    await input(last);
+    await until(() => ev(`document.querySelectorAll('.agw-queued').length === 3`), '三条消息入队');
+    await ev(`(() => {
+      const button = document.querySelectorAll('.agw-prioritize')[1];
+      button.click();
+      button.click();
+    })()`);
+    await until(() => ev(`!${L}.streaming && !document.querySelector('.agw-queued') && ${L}.messages.findLast(m => m.role === 'user')?.content === ${JSON.stringify(last)}`), '插队及后续任务完成');
+    const messages = await ev(`${L}.messages`);
+    assert.deepEqual(messages.filter(msg => msg.role === 'user').slice(-4).map(msg => msg.content), [running, priority, first, last]);
+    const selected = messages.findIndex(msg => msg.content === priority);
+    assert.equal(messages[selected - 1].aborted, true);
+    assert.match(messages[selected - 1].content, /这段正文应当完整保留/);
+    assert.equal(messages[selected].docs[0].name, '插队附件.txt');
+  });
   await step('长回复完整可读，向上阅读时保持滚动位置', async () => {
     await input('LONG_TEST');
     await until(() => ev(`document.querySelector('.agw-feed').scrollHeight > document.querySelector('.agw-feed').clientHeight + 1000`), '长内容');
@@ -188,11 +213,13 @@ try {
     await shot('agent-workspace-long');
   });
   await step('会话历史、新对话、草稿与刷新恢复', async () => {
-    const count = await ev(`${L}.messages.length`); await input('尚未发送的会话草稿', false); await ev(`${L}.flush()`); await newChat();
+    const count = await ev(`${L}.messages.length`);
+    const title = await ev(`${L}.listSessions().then(data => data.chats.find(chat => chat.id === ${JSON.stringify(mainSession)}).title)`);
+    await input('尚未发送的会话草稿', false); await ev(`${L}.flush()`); await newChat();
     assert.equal(await ev(`${L}.messages.length`), 0); assert.equal(await ev(`document.querySelector('.agw-input').value`), '');
     await ev(`document.querySelector('[aria-label="对话历史"]').click()`);
     await until(() => ev(`!!document.querySelector('.agw-menu[aria-label="对话历史"]')`), '历史菜单');
-    await ev(`document.querySelector('.agw-menu button').click()`);
+    await ev(`[...document.querySelectorAll('.agw-menu button')].find(button => button.querySelector('.agw-menu-copy > span')?.textContent === ${JSON.stringify(title)}).click()`);
     await until(() => ev(`${L}.getState().sessionId===${JSON.stringify(mainSession)} && ${L}.messages.length===${count}`), '历史加载');
     assert.equal(await ev(`document.querySelector('.agw-input').value`), '尚未发送的会话草稿');
     await ev(`window.__qaReloading=true`); await cdp.send('Page.reload');

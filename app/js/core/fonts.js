@@ -1,3 +1,5 @@
+import { editorProjectFonts } from './project-fonts.js';
+
 export const FONT_PROFILES = [
   { id:'auto', label:'自动识别内容' }, { id:'academic', label:'学术 / 知识讲解' }, { id:'business', label:'商务 / 汇报' },
   { id:'editorial', label:'人文 / 编辑排版' }, { id:'technical', label:'技术 / 数据' }, { id:'playful', label:'轻松 / 教学' },
@@ -10,11 +12,12 @@ export const FONT_CATALOG = [
   ['Cascadia Code','Cascadia Code','mono'],['Consolas','Consolas','mono'],['Menlo','Menlo','mono'],
 ].map(([family,label,category])=>({family,label,category}));
 export function availableFonts(doc = globalThis.document) {
-  if (!doc?.createElement) return FONT_CATALOG.map((f)=>({...f,available:null}));
+  const bundled = editorProjectFonts().map(({ family, label, category, stack }) => ({ family, label, category, stack, available: true, bundled: true }));
+  if (!doc?.createElement) return [...FONT_CATALOG.map((f)=>({...f,available:null})), ...bundled];
   const canvas=doc.createElement('canvas'), context=canvas.getContext('2d'), sample='iiiiWWmm汉字0123456789';
   const width=(font)=>{context.font='48px '+font; return context.measureText(sample).width;};
   const mono=width('monospace'), serif=width('serif');
-  return FONT_CATALOG.map((f)=>({...f,available: Math.abs(width(JSON.stringify(f.family)+',monospace')-mono)>.1 || Math.abs(width(JSON.stringify(f.family)+',serif')-serif)>.1}));
+  return [...FONT_CATALOG.map((f)=>({...f,available: Math.abs(width(JSON.stringify(f.family)+',monospace')-mono)>.1 || Math.abs(width(JSON.stringify(f.family)+',serif')-serif)>.1})), ...bundled];
 }
 export function recommendFonts({ profile='auto', text='', fonts=availableFonts() }={}) {
   const chinese=/[\u3400-\u9fff]/.test(text);
@@ -23,8 +26,9 @@ export function recommendFonts({ profile='auto', text='', fonts=availableFonts()
   const choose=(names,fallback)=>names.find((name)=>installed.some((f)=>f.family===name))||fallback;
   const sans=chinese?choose(['Microsoft YaHei','PingFang SC','Noto Sans SC','Source Han Sans SC','DengXian'],'sans-serif'):choose(['Aptos','Segoe UI','Arial'],'sans-serif');
   const serif=chinese?choose(['Noto Serif SC','Source Han Serif SC','Songti SC','SimSun'],sans):choose(['Georgia','Times New Roman'],sans);
-  const heading=['academic','editorial'].includes(profile)?serif:profile==='playful'&&chinese?choose(['KaiTi','Microsoft YaHei'],sans):sans;
+  const heading=profile==='editorial'&&chinese?choose(['wds-font-huiwen-mincho','Noto Serif SC'],serif):profile==='academic'?serif:profile==='playful'&&chinese?choose(['wds-font-lxgw-marker','KaiTi','Microsoft YaHei'],sans):sans;
   const mono=choose(['Cascadia Code','Consolas','Menlo'],'monospace');
-  return { profile,heading,body:sans,mono,stack:(family)=>(['serif','sans-serif','monospace'].includes(family)?family:JSON.stringify(family))+','+(chinese?'"Microsoft YaHei","PingFang SC",':'')+(family===mono?'monospace':'sans-serif'),
-    reason:`${FONT_PROFILES.find((p)=>p.id===profile)?.label||profile}：标题使用${heading}，正文使用${sans}；按本机可用字体选择并保留回退字体。` };
+  const label = family => installed.find(font => font.family === family)?.label || family;
+  return { profile,heading,body:sans,mono,stack:(family)=>installed.find(font => font.family === family)?.stack || ((['serif','sans-serif','monospace'].includes(family)?family:JSON.stringify(family))+','+(chinese?'"Microsoft YaHei","PingFang SC",':'')+(family===mono?'monospace':'sans-serif')),
+    reason:`${FONT_PROFILES.find((p)=>p.id===profile)?.label||profile}：标题使用${label(heading)}，正文使用${label(sans)}，并保留回退字体。` };
 }

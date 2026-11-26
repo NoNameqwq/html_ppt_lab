@@ -1,3 +1,6 @@
+import { userInstructionsPatch } from '../core/user-instructions.js';
+import { createProjectBranches } from '../core/project-branches.js';
+import { chatAssetDirectory } from '../core/chat-assets.js';
 import { Buffer } from 'buffer';
 import JSZip from 'jszip';
 import { convertPptx } from '../../../server/pptx.mjs';
@@ -39,6 +42,7 @@ export function createBackend(storage,bundle,nativeFetch) {
     search:((s)=>({provider:s.provider||'deepseek',baseUrl:s.baseUrl||'https://api.deepseek.com',maxResults:s.maxResults||5,keySet:!!(s.apiKey||provider('deepseek').apiKey)}))(settings().search),
     imageGeneration:publicImageSettings(settings().imageGeneration),skillsCatalog:bundle.skills});
   function updateSettings(patch,user=false) {
+    patch = userInstructionsPatch(patch, user);
     if(patch.imageGeneration&&!user)throw fail('生图须由用户在 API 设置中手动开启',403);
     const next=structuredClone(settings());
     if(patch.imageGeneration)next.imageGeneration=updateImageSettings(next.imageGeneration,patch.imageGeneration);
@@ -84,12 +88,37 @@ export function createBackend(storage,bundle,nativeFetch) {
     if(v.chat&&v.conversation?.turnId){const turn=v.chat.messages?.find((m)=>m.turnId===v.conversation.turnId);if(turn){turn.versions||={};turn.versions[p.meta.id]||={};turn.versions[p.meta.id][v.conversation.phase]=v.id;}}
     p.versions.push(v);return v;
   }
+  function branchesFor(p) {
+    const version = id => { const v = p.versions.find(v => v.id === id); if (!v?.chat) throw fail('此版本没有对应的对话快照'); return v; };
+    return createProjectBranches({ projectId: p.meta.id,
+      readState: async () => structuredClone(p.branchState || null),
+      writeState: async value => { p.branchState = structuredClone(value); await persist(); },
+      readChat: async id => structuredClone(p.chats[id] || { messages: [], skills: [] }),
+      saveChat: async (id, chat) => { p.chats[id] = { ...structuredClone(chat), updatedAt: Date.now() }; await persist(); },
+      deleteChat: async id => { delete p.chats[id]; await persist(); },
+      capture: async body => { const v = capture(p, body); await persist(); return publicVersion(v); },
+      readVersionChat: async id => structuredClone(version(id).chat),
+      findSessionVersion: async id => p.versions.findLast(v => v.chat && v.conversation?.sessionId === id && v.conversation?.phase === 'after'),
+      restore: async (id, options) => {
+        const v = version(id), backup = capture(p, { kind: 'backup', label: '分支切换前自动备份' });
+        p.files = structuredClone(v.files); p.meta = { ...structuredClone(v.meta), updatedAt: Date.now() };
+        const restored = structuredClone(v.chat), previous = p.chats[options.targetSessionId];
+        if (options.preserveConversationMetadata && previous) {
+          if (previous.title) restored.title = previous.title;
+          if (previous.origin) restored.origin = previous.origin;
+        }
+        p.chats[options.targetSessionId] = restored; await persist();
+        return { ok: true, version: publicVersion(v), backup: publicVersion(backup) };
+      },
+    });
+  }
   function changes(p,v){return [...new Set([...Object.keys(v.files),...Object.keys(p.files)])].filter((name)=>v.files[name]!==p.files[name]).map((path)=>({path,action:v.files[path]===undefined?'remove':p.files[path]===undefined?'restore':'replace'}));}
   async function search(body,draft){const cfg={...settings().search,...draft};const key=cfg.clearKey?'':cfg.apiKey||settings().search.apiKey||provider('deepseek').apiKey;
     if(!key)throw fail('请先配置搜索密钥');const tavily=cfg.provider==='tavily',base=(cfg.baseUrl||(tavily?'https://api.tavily.com':'https://api.deepseek.com')).replace(/\/+$/,'');
     const response=await remote(nativeFetch,base+(tavily?'/search':/\/v1$/.test(base)?'/tools/search':'/v1/tools/search'),{method:'POST',headers:{'Content-Type':'application/json',...(!tavily?{Authorization:'Bearer '+key}:{})},body:JSON.stringify(tavily?{api_key:key,query:body.query,max_results:cfg.maxResults||5}:{query:body.query,count:cfg.maxResults||5,need_content:true}),signal:body.signal});
     if(!response.ok)throw fail('搜索服务返回 HTTP '+response.status);const data=await response.json();return {ok:true,results:data.results||[],count:data.results?.length||0};}
   async function generate(p,body,signal){const cfg=settings().imageGeneration;if(!cfg.enabled)throw fail('生图未开启，请用户手动开启',403);
+    const sessionId=body.sessionId??'default',directory=chatAssetDirectory(sessionId);
     signal=signal?AbortSignal.any([signal,AbortSignal.timeout(180000)]):AbortSignal.timeout(180000);signal.throwIfAborted();
     let models=cfg.models||[];if(!models.length&&cfg.model==='auto'){try{models=(await fetchModels(nativeFetch,cfg,true,signal)).models;}catch{}}
     const payload=generationPayload(cfg,body,models),{model}=payload;
@@ -99,7 +128,7 @@ export function createBackend(storage,bundle,nativeFetch) {
     if(bytes.length>20*1024*1024)throw fail('图片超过 20MB');
     const png=bytes[0]===137&&bytes[1]===80,jpg=bytes[0]===255&&bytes[1]===216,webp=bytes.toString('ascii',8,12)==='WEBP';if(!png&&!jpg&&!webp)throw fail('服务没有返回有效的 PNG/JPEG/WebP 图片');
     if(!settings().imageGeneration.enabled)throw fail('用户已关闭生图，结果未保存',403);signal?.throwIfAborted();
-    const name=`assets/${id('generated')}.${png?'png':jpg?'jpg':'webp'}`;p.files[name]=asData(name,bytes);return {ok:true,url:name,model,size:bytes.length};}
+    const name=`${directory}/${id('generated')}.${png?'png':jpg?'jpg':'webp'}`;p.files[name]=asData(name,bytes);return {ok:true,url:name,directory,sessionId,inserted:false,model,size:bytes.length};}
   async function handle(input,init={}){
     const url=new URL(typeof input==='string'?input:input.url,'https://webdeck.local'),route=decodeURIComponent(url.pathname),method=(init.method||'GET').toUpperCase(),body=typeof init.body==='string'?parse(init.body):{},signal=init.signal;
     if(route.startsWith('/api/webdav/'))return webDAVResponse(cloud,url.href,method,body,backupWorkspace.readRecovery);
@@ -151,6 +180,14 @@ export function createBackend(storage,bundle,nativeFetch) {
     const workspace=/^\/api\/workspace\/(chat|chats)$/.exec(route),projectRoute=/^\/api\/projects\/([^/]+)(.*)$/.exec(route);
     const p=projectRoute?getProject(projectRoute[1]):null,sub=projectRoute?projectRoute[2]:'/'+workspace?.[1],chats=p?p.chats:state.chats;
     if(workspace||p){
+      if (p) {
+        const branches = branchesFor(p); await branches.recover();
+        if (sub === '/branches' && method === 'GET') return json(await branches.list());
+        if (['/branches', '/branches/switch', '/branches/rewind', '/branches/rename'].includes(sub) && method === 'POST') {
+          const result = await branches[sub === '/branches' ? 'fork' : sub.split('/').at(-1)](body);
+          return json({ ...result, project: projectInfo(p) });
+        }
+      }
       if(sub==='/chat'){const session=url.searchParams.get('session')||'default';if(method==='GET')return json(chats[session]||{messages:[],updatedAt:0});chats[session]={...body,updatedAt:Date.now()};await persist();return json({ok:true,updatedAt:chats[session].updatedAt});}
       if(sub==='/chats')return json({chats:Object.entries(chats).map(([id,c])=>({id,title:c.title||c.messages?.find((m)=>m.role==='user')?.content?.slice(0,80)||'新对话',turns:c.messages?.filter((m)=>m.role==='user').length||0,updatedAt:c.updatedAt,origin:c.origin})).filter((c)=>c.turns).sort((a,b)=>b.updatedAt-a.updatedAt)});
       if(!sub){if(method==='DELETE'){delete state.projects[p.meta.id];await persist();return json({ok:true});}if(method==='PATCH'){const archive=archivePatch(p.meta,body);const fields=['name','kind','slideCount','theme','cover','coverFg','coverAccent','origin'];for(const k of fields)if(body[k]!==undefined)p.meta[k]=body[k];Object.assign(p.meta,archive,{updatedAt:Date.now()});await persist();}return json({project:projectInfo(p),files:Object.keys(p.files)});}

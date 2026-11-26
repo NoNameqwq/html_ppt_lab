@@ -12,7 +12,7 @@ export const API_CATALOG = [
   entry('files.read', 'GET', '/api/projects/{projectId}/file', '读取工程文件，query.path 为相对路径', 'read', { path: 'query: string' }),
   entry('files.write', 'PUT', '/api/projects/{projectId}/file', '写入工程文件；当前工程使用 file_write 自动保存和重载', 'full', { path: 'string', content: 'string' }),
   entry('assets.upload', 'POST', '/api/projects/{projectId}/assets', '上传素材并返回工程内相对 URL', 'edit', { name: 'string', dataUrl: 'base64 data URL' }),
-  entry('images.generate', 'POST', '/api/projects/{projectId}/generate-image', '生成图片并保存为本地素材；必须由用户手动开启生图。需要同时插入页面时用 deck_generate_image', 'edit', { prompt: 'string', model: '可选，已发现或用户指定的模型', size: 'auto / 1024x1024 / 1536x1024 / 1024x1536', quality: 'auto / low / medium / high', background: 'auto / opaque / transparent（GPT）', outputFormat: 'png / jpeg / webp（GPT）', outputCompression: '0–100，JPEG/WebP（GPT）' }),
+  entry('images.generate', 'POST', '/api/projects/{projectId}/generate-image', '生成图片并保存到当前对话素材目录，返回路径，不插入或切换页面；使用时另调 deck_insert_image。必须由用户手动开启生图。', 'edit', { prompt: 'string', model: '可选，已发现或用户指定的模型', size: 'auto / 1024x1024 / 1536x1024 / 1024x1536', quality: 'auto / low / medium / high', background: 'auto / opaque / transparent（GPT）', outputFormat: 'png / jpeg / webp（GPT）', outputCompression: '0–100，JPEG/WebP（GPT）' }),
   entry('images.models', 'GET', '/api/image-models', '使用用户已保存的生图配置发现可用图像模型，不生成图片或开启生图'),
   entry('patches.read', 'GET', '/api/projects/{projectId}/patches', '读取原稿补丁'),
   entry('patches.write', 'PUT', '/api/projects/{projectId}/patches', '保存原稿补丁', 'full', { patches: 'array' }),

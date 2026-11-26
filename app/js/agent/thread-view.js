@@ -9,7 +9,7 @@ const glyph = (name, size = 15) => h('span', { class: 'agw-glyph', html: icon(na
 const button = (label, name, action) => h('button', { type: 'button', class: 'agw-icon', title: label, 'aria-label': label, onClick: action }, glyph(name));
 
 /** Chronological progress while running; one collapsible process and a visible final answer. */
-export function createThreadView({ streaming = false, scroll, resume, undo, versions, openProject, getElapsedMs }) {
+export function createThreadView({ streaming = false, scroll, resume, undo, versions, rewind, fork, openProject, getElapsedMs }) {
   const el = h('article', { class: 'agw-turn', 'aria-label': '助手回复', 'data-running': String(streaming) });
   const ledger = h('details', { class: 'agw-ledger hidden', open: true });
   const ledgerLabel = h('span', {}, '正在处理');
@@ -23,8 +23,10 @@ export function createThreadView({ streaming = false, scroll, resume, undo, vers
   const again = h('button', { type: 'button', class: 'agw-text-button hidden', onClick: () => resume() }, glyph('play', 12), '继续处理');
   const note = h('span', { class: 'agw-turn-note' });
   const version = h('button', { type: 'button', class: 'agw-text-button agw-turn-version hidden', onClick: () => versions?.() }, glyph('history', 13), '本轮版本');
+  const revert = h('button', { type: 'button', class: 'agw-text-button hidden', onClick: () => rewind?.() }, glyph('undo', 13), '回溯到此处');
+  const branch = h('button', { type: 'button', class: 'agw-text-button hidden', onClick: () => fork?.() }, glyph('copy', 13), '从此处分支');
   const deliveries=h('div',{class:'agw-deliveries hidden'});
-  foot.append(copy, again, version, note); el.append(ledger, deliveries, foot);
+  foot.append(copy, again, version, revert, branch, note); el.append(ledger, deliveries, foot);
   const parts = [], tools = new Map();
   let previewCleanup=[];
   let part = null, continued = false, finished = false, incomplete = false, stopped = false, failureCount = 0;
@@ -49,7 +51,8 @@ export function createThreadView({ streaming = false, scroll, resume, undo, vers
     ledger.classList.remove('hidden');
     const meta = getToolMeta(call.function.name), detail = h('details', { class: 'agw-operation', 'data-state': 'pending' });
     let args; try { args = JSON.parse(call.function.arguments || '{}'); } catch { args = {}; }
-    const target = args.path || args.name || args.operation || args.elementId || (Number.isInteger(args.index) ? '第 ' + (args.index + 1) + ' 页' : '');
+    const target = call.function.name === 'browser_use' ? (args.url || args.action || '') :
+      args.path || args.name || args.operation || args.elementId || (Number.isInteger(args.index) ? '第 ' + (args.index + 1) + ' 页' : '');
     const label = h('span', { class: 'agw-operation-label' }, meta.label), targetLabel = h('span', { class: 'agw-operation-target' }, String(target)), mark = h('span', { class: 'agw-operation-mark' });
     detail.append(h('summary', {}, glyph(meta.kind === 'read' ? 'terminal' : 'edit'), label, targetLabel, mark));
     const more = h('div', { class: 'agw-operation-detail' }); detail.append(more); ledgerBody.append(detail);
@@ -132,7 +135,7 @@ export function createThreadView({ streaming = false, scroll, resume, undo, vers
       }
       scroll();
     },
-    setVersion(available) { version.classList.toggle('hidden', !available); },
+    setVersion(available) { version.classList.toggle('hidden', !available); revert.classList.toggle('hidden', !available || !rewind); branch.classList.toggle('hidden', !available || !fork); },
     setContent(text) { const p = current(); p.content = mergeContinuation(p.carry, text); p.md.classList.remove('hidden'); p.stream.update(p.content); scroll(); },
     setReasoning(text) {
       const p = current();

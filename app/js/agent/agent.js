@@ -1,3 +1,5 @@
+import { openUserInstructions } from './user-instructions.js';
+import { createBranchManager } from './branches.js';
 /* Agent workspace UI, rebuilt independently from the editor's design system. */
 import { h, readFileAsDataURL, uid } from '../core/dom.js';
 import { icon } from '../ui/icons.js';
@@ -8,10 +10,12 @@ import { resolveActive, getProviders, loadSettings, openSettings } from './setti
 import { PERMISSION_LEVELS, normalizePermission } from './tools.js';
 import { loadCatalog, openManager } from './skills.js';
 import { createContextMeter } from './context-meter.js';
-import { ACCEPT, extractFile, fileExt } from './attachments.js';
+import { ACCEPT, extractFile, fileExt, imageForChat, restoreDraftFiles } from './attachments.js';
 import { createVersionHistory } from './version-history.js';
 import { visibleProviderModels } from '../core/model-visibility.js';
 import { formatElapsed } from './generation-time.js';
+import { createSkillPicker } from './skill-picker.js';
+import { hasBuiltinBrowser, showBuiltinBrowser } from './browser.js';
 
 const read = (key, fallback = '') => { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } };
 const write = (key, value) => { try { localStorage.setItem(key, value); } catch { /* storage disabled */ } };
@@ -23,6 +27,9 @@ export async function init(ctx) {
   const app = document.getElementById('app');
   let loop, activeTurn = null, lastTurn = null, pinned = true, menu = null, files = [], queue = [];
   let preparing = false, slashIndex = 0, slashItems = [], sessionKey = '';
+  let priorityItem = null;
+  let draftBrief;
+  let pendingRewindDraft;
   let permission = normalizePermission(read('wds:agent:permission', 'full'));
   let effort = read('wds:agent:effort', 'auto'), web = read('wds:agent:webSearch', '0') === '1';
   let creativeMotion=read('wds:agent:creativeMotion','0')==='1';
@@ -49,13 +56,14 @@ export async function init(ctx) {
   const access = iconButton('工作权限', 'shield', () => openPermissions()), plus = iconButton('添加附件与工具', 'plus', () => openAddMenu());
   const motionButton=h('button',{type:'button',class:'agw-motion','aria-label':'华丽动效','aria-pressed':'false',onClick:()=>toggleCreativeMotion()},glyph('motion',15),h('span',{class:'agw-motion-label'},'华丽动效'));
   const fastButton=h('button',{type:'button',class:'agw-fast','aria-label':'快速生成','aria-pressed':'false',onClick:()=>toggleFastMode()},glyph('zap',15),h('span',{},'快速生成'));
+  const skillPicker = createSkillPicker(ctx, () => loop, () => safe(() => openUserInstructions(ctx)));
   const send = iconButton('发送消息', 'arrow-up', () => { if (loop.streaming) loop.stop(); else safe(() => submit()); }, 'agw-submit');
   const enqueue = iconButton('加入队列', 'arrow-up', () => safe(() => submit()), 'agw-enqueue hidden');
   const compose = h('div', { class: 'agw-compose' }, slash, attachments, input,
-    h('div',{class:'agw-compose-options'},motionButton,fastButton),
+    h('div',{class:'agw-compose-options'},motionButton,fastButton,skillPicker.button),
     h('div', { class: 'agw-compose-tools' }, plus, access, h('span', { class: 'agw-spacer' }), model, teamSettings, effortButton, enqueue, send));
   const contextMeter = createContextMeter();
-  const composer = h('div', { class: 'agw-composer' }, plan, queued, h('div',{class:'agw-status-row'},status,timer), compose, contextMeter.el, fileInput);
+  const composer = h('div', { class: 'agw-composer' }, skillPicker.popup, plan, queued, h('div',{class:'agw-status-row'},status,timer), compose, contextMeter.el, fileInput);
   const more = iconButton('对话选项', 'more-horizontal', () => openMore()), history = iconButton('对话历史', 'history', () => safe(openHistory));
   const create = iconButton('新对话', 'plus', () => safe(() => loop.newChat())), close = iconButton('收起对话', 'panel-right', () => setOpen(false));
   const maximize = iconButton('全屏对话', 'maximize', () => setFullscreen(!fullscreen));
@@ -65,7 +73,28 @@ export async function init(ctx) {
   const draftKey = () => `wds:agent:draft:${loop?.projectId || 'workspace'}:${loop?.getState().sessionId || 'default'}`;
   const notify = (error) => ctx.toast.error(error?.message || String(error));
   const safe = (fn) => Promise.resolve().then(fn).catch(notify);
-  const versions = createVersionHistory(ctx, { getLoop: () => loop, onRestored: () => { queue = []; renderQueue(); } });
+  function restoreDraft(message) {
+    input.value = message.content || '';
+    files = restoreDraftFiles(message);
+    draftBrief = message.brief;
+    grow();
+    renderFiles();
+    saveDraft();
+    refreshControls();
+    input.focus();
+  }
+  const versions = createVersionHistory(ctx, { getLoop: () => loop, onRestored: (result, message) => {
+    queue = [];
+    priorityItem = null;
+    renderQueue();
+    pendingRewindDraft = null;
+    if (message) {
+      if (result.conversationError) {
+        pendingRewindDraft = { projectId: loop.projectId, sessionId: result.conversation.sessionId, message };
+      } else restoreDraft(message);
+    }
+  } });
+  const branches = createBranchManager(ctx, () => loop);
   const toolOptions = () => ({ permission, reasoningEffort: effort, webSearch: web,creativeMotion,fastMode });
   function selectEffort(id) {
     if(loop.streaming||loop.getState().loading){ctx.toast.warn('请等待当前任务结束或停止后再切换思考强度');return;}
@@ -129,10 +158,11 @@ export async function init(ctx) {
   ctx.bus.on('ui:theme', syncAppearance);
   ctx.store.subscribe(() => { if (appearance !== ctx.store.get().ui.theme) syncAppearance(); });
   function context() {
-    const s = ctx.store.get(); projectContext.textContent = s.project ? s.project.name + (s.deck.total ? ` · ${s.deck.current + 1}/${s.deck.total}` : '') : '工作区';
+    const s = ctx.store.get(); projectContext.textContent = s.project ? s.project.name + (loop?.getState().branchName ? ' · ' + loop.getState().branchName : '') + (s.deck.total ? ` · ${s.deck.current + 1}/${s.deck.total}` : '') : '工作区';
     title.textContent = loop?.messages.find((m) => m.role === 'user' && !m.versionEvent)?.content || '新对话'; title.title = title.textContent;
   }
   function refreshControls() {
+    skillPicker.refresh();
     const active = resolveActive(ctx), cfg = loop?.getState(), efforts = { none:'关闭',auto: '自动', low: '低', medium: '中', high: '高',xhigh:'极高' };
     modelLabel.textContent = active.model || '选择模型'; effortLabel.textContent = efforts[effort] || '自动';
     model.classList.toggle('hidden',effort==='xhigh');teamSettings.classList.toggle('hidden',effort!=='xhigh');
@@ -143,7 +173,7 @@ export async function init(ctx) {
     fastButton.classList.toggle('is-on',fastMode);fastButton.setAttribute('aria-pressed',String(fastMode));fastButton.disabled=running||!!cfg?.loading;
     fastButton.title='快速生成'+(fastMode?'已开启':'已关闭')+'：减少重复复核和可选润色，保留必要检查。思考强度可单独设置。';
     motionButton.classList.toggle('is-on',creativeMotion);motionButton.setAttribute('aria-pressed',String(creativeMotion));motionButton.disabled=running||!!cfg?.loading;
-    motionButton.title='华丽动效'+(creativeMotion?'已开启':'已关闭')+'：'+(creativeMotion?'创作时使用切换、元素动画、时间线和背景设计，丰富 SVG 与 3D 表现。':'开启后强化动效与视觉创作。');
+    motionButton.title='华丽动效'+(creativeMotion?'已开启':'已关闭')+'：'+(creativeMotion?'贴合主题自主创新排版、字体、背景与交互，积极运用可用工具，设计流畅的元素动画、切换和时间线。':'开启后强化主题创意、排版字体与动效设计。');
     send.replaceChildren(glyph(running ? 'stop' : 'arrow-up', running ? 13 : 18)); send.setAttribute('aria-label', running ? '停止生成' : '发送消息'); send.title = running ? '停止生成' : '发送消息'; send.classList.toggle('is-stop', running);
     send.disabled = preparing || !!cfg?.loading || (!running && !input.value.trim() && !files.length); enqueue.classList.toggle('hidden', !running || !input.value.trim());
     input.placeholder = running ? '补充需求，Enter 加入队列' : '与 Agent 一起创作'; context();
@@ -186,9 +216,10 @@ export async function init(ctx) {
     const expanded = panel.dataset.expanded === 'true';
     showMenu(more, '对话', [
       { label: '版本历史', description: '查看工程快照与对话回退', icon: 'history', action: () => versions.open() },
+      { label: '项目分支', description: '独立对话与完整项目状态', icon: 'folder', action: () => branches.open() },
       { label: 'API 设置', description: '对话模型 · 联网搜索 · 生图', icon: 'settings', action: settings },
       { label: '设计技能', icon: 'sparkles', action: async () => openManager(ctx, { catalog: await loadCatalog(ctx), enabled: loop.skills, onChange: (ids) => loop.setSkills(ids) }) },
-      {label:creativeMotion?'关闭华丽动效':'开启华丽动效',description:'切换 · 动画 · 时间线 · 背景设计，强化 SVG 与 3D 创意',icon:'motion',selected:creativeMotion,action:toggleCreativeMotion},
+      {label:creativeMotion?'关闭华丽动效':'开启华丽动效',description:'主题创意 · 排版字体 · 流畅切换与时间线 · 丰富视觉交互',icon:'motion',selected:creativeMotion,action:toggleCreativeMotion},
       {label:fastMode?'关闭快速生成':'开启快速生成',description:'减少重复复核，保留必要检查',icon:'zap',selected:fastMode,action:toggleFastMode},
       { divider: true },
       { label: expanded ? '恢复侧栏宽度' : '展开阅读', icon: 'maximize', action: () => { panel.dataset.expanded = String(!expanded); setWidth(expanded ? 500 : Math.min(820, innerWidth - 32)); } },
@@ -203,14 +234,16 @@ export async function init(ctx) {
   }
   async function openHistory() {
     await loop.flush(); const data = await loop.listSessions();
-    showMenu(history, '对话历史', (data.chats || []).map((chat) => ({ label: chat.title, description: `${chat.turns} 条消息`, icon: 'message', selected: chat.id === loop.getState().sessionId,
-      action: () => loop.load(loop.projectId, chat.id) })).concat([{ divider: true }, { label: '新对话', icon: 'plus', action: () => loop.newChat() }]));
+    showMenu(history, '对话历史', [{ label: '项目分支', description: '切换分支时同步恢复项目', icon: 'folder', action: () => branches.open() }, { divider: true }, ...(data.chats || []).map((chat) => ({ label: chat.title, description: `${chat.turns} 条消息`, icon: 'message', selected: chat.id === loop.getState().sessionId,
+      action: () => loop.load(loop.projectId, chat.id) })), { divider: true }, { label: '新对话', icon: 'plus', action: () => loop.newChat() }]);
   }
   function openAddMenu() {
     showMenu(plus, '添加与工具', [
+      ...(hasBuiltinBrowser(ctx) ? [{ label: '内置浏览器', description: '查看当前网页、操作或截图', icon: 'globe', action: () => showBuiltinBrowser(ctx) }] : []),
       { label: '添加图片或文档', description: 'PDF · Word · PPT · Markdown', icon: 'paperclip', action: () => fileInput.click() },
       { label: '收藏元素', description: '从跨工程收藏库添加参考素材', icon: 'star', action: () => ctx.bus.runCommand('favorites.open',{mode:'chat'}) },
       { label: '导入 PPT 或网页', icon:'import',action:()=>ctx.bus.runCommand('file.import') },
+      { label: '自定义指令与 Skill', description: '挂载 Skill · 追加系统提示词', icon: 'sparkles', action: () => openUserInstructions(ctx) },
       { label: '自定义模板',icon:'layout',action:()=>ctx.bus.runCommand('templates.manage') },
       { label: 'API 设置', description: '对话、搜索与生图服务', icon: 'settings', action: settings },
       { label: web ? '关闭联网搜索' : '开启联网搜索', selected: web, icon: 'globe', action: () => { web = !web; write('wds:agent:webSearch', web ? '1' : '0'); loop.setOptions(toolOptions()); refreshControls(); } },
@@ -242,47 +275,112 @@ export async function init(ctx) {
   async function addFiles(incoming) {
     for (const source of incoming) {
       if (source.size > 30 * 1024 * 1024) { ctx.toast.warn(source.name + ' 超过 30MB'); continue; }
-      const isImage = source.type.startsWith('image/');
+      const isImage = source.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(source.name);
       if (!isImage && !ACCEPT.split(',').includes('.' + fileExt(source.name))) { ctx.toast.warn('不支持该文件类型：' + source.name); continue; }
       const file = { name: source.name, status: 'reading', kind: isImage ? '图片' : '文档' }; files.push(file); renderFiles();
       try {
-        if (isImage) file.image = await readFileAsDataURL(source);
+        if (isImage) {
+          const original = await readFileAsDataURL(source);
+          file.image = await imageForChat(source, original);
+          if (file.image !== original && source.type.startsWith('image/')) file.originalImage = original;
+        }
         else { const data = await extractFile(source); if (data.error) throw new Error(data.error); Object.assign(file, data); if (data.images) file.scanImages = data.images; }
         if(/\.pptx?$/i.test(source.name)){
           const staged=await ctx.api.stageImport({fileName:source.name,dataUrl:await readFileAsDataURL(source)});
           file.text=(file.text||'')+'\n\nPowerPoint 原文件已暂存。如需解析为 HTML，请调用 app_call_api，operation=projects.import，body='+JSON.stringify({importId:staged.importId,fileName:source.name,pptMode:'editable'})+'。导入会创建独立工程，报告会列出转换差异。';
         }
         file.status = 'ready';
-      } catch (err) { file.status = 'error'; file.error = err.message; }
+      } catch (err) { file.status = 'error'; file.error = isImage ? '图片无法读取，请重新粘贴或转换成 PNG / JPEG。' : err.message; }
       renderFiles(); refreshControls();
     }
   }
   fileInput.addEventListener('change', async () => { await addFiles([...fileInput.files]); fileInput.value = ''; });
-  input.addEventListener('paste', (e) => { if (e.clipboardData?.files.length) { e.preventDefault(); safe(() => addFiles([...e.clipboardData.files])); } });
+  input.addEventListener('paste', (event) => {
+    const clipboard = event.clipboardData;
+    if (!clipboard) return;
+    const pasted = [...clipboard.files];
+    if (!pasted.length) {
+      for (const item of clipboard.items || []) {
+        if (item.kind !== 'file') continue;
+        const file = item.getAsFile();
+        if (file) pasted.push(file);
+      }
+    }
+    if (pasted.length) {
+      event.preventDefault();
+      safe(() => addFiles(pasted));
+    }
+  });
   compose.addEventListener('dragover', (e) => { e.preventDefault(); compose.classList.add('is-dragging'); }); compose.addEventListener('dragleave', () => compose.classList.remove('is-dragging'));
   compose.addEventListener('drop', (e) => { e.preventDefault(); compose.classList.remove('is-dragging'); safe(() => addFiles([...e.dataTransfer.files])); });
   function renderQueue() {
     queued.replaceChildren(); queued.classList.toggle('hidden', !queue.length);
-    queue.forEach((item) => queued.append(h('div', { class: 'agw-queued' }, glyph('message', 14), h('span', {}, item.text || '附件消息'), h('small', {}, '排队中'), iconButton('移除排队消息', 'x', () => { queue = queue.filter((q) => q !== item); renderQueue(); }))));
+    const blocked = !!priorityItem || loop.getState().loading;
+    for (const item of queue) {
+      const prioritize = h('button', {
+        type: 'button', class: 'agw-text-button agw-prioritize',
+        title: '停止当前生成并优先发送这条消息',
+        onClick: () => safe(() => sendPriority(item)),
+      }, glyph('zap', 13), '插队发送');
+      const remove = iconButton('移除排队消息', 'x', () => {
+        const index = queue.indexOf(item);
+        if (index < 0 || priorityItem === item) return;
+        queue.splice(index, 1); renderQueue();
+      });
+      prioritize.disabled = blocked;
+      remove.disabled = priorityItem === item;
+      const label = item.text || '附件消息';
+      queued.append(h('div', { class: 'agw-queued' }, glyph('message', 14), h('span', { title: label }, label),
+        h('small', {}, priorityItem === item ? '准备发送' : '排队中'), prioritize, remove));
+    }
+  }
+  async function sendQueued(item) {
+    if (priorityItem === item) priorityItem = null;
+    const index = queue.indexOf(item);
+    if (index < 0 || loop.streaming || loop.getState().loading) { renderQueue(); return; }
+    const owner = queue;
+    owner.splice(index, 1); renderQueue();
+    const result = await loop.send(item.text, item.images, item.options);
+    if (!result.accepted && !result.ok && queue === owner) {
+      queue.splice(index, 0, item); renderQueue();
+    }
+  }
+  function sendPriority(item) {
+    if (priorityItem || !queue.includes(item) || loop.getState().loading) return;
+    if (!loop.validateConfiguration({ hasImages: item.images.length > 0 }).ok) return;
+    if (!loop.streaming) return sendQueued(item);
+    priorityItem = item;
+    renderQueue();
+    loop.stop();
   }
   async function submit(brief) {
     if (preparing || loop.getState().loading) return;
     if (files.some((f) => f.status === 'reading')) { ctx.toast.warn('附件还在读取中'); return; }
     if (files.some((f) => f.status === 'error')) { ctx.toast.warn('请先移除读取失败的附件'); return; }
     const text = input.value.trim(); if (!text && !files.length) return;
-    if(!loop.validateConfiguration().ok)return;
-    preparing = true; refreshControls(); const ready = files.slice(), images = [], assetPaths = [], docs = [];
+    if (!loop.validateConfiguration({ hasImages: files.some(file => file.image || file.scanImages?.length) }).ok) return;
+    preparing = true; refreshControls();
+    const ready = files.slice(), images = [], assetPaths = [], docs = [], attachmentLayout = [];
+    const projectId = loop.projectId;
     try {
       for (const f of ready) {
-        if (f.image) {
-          images.push(f.image);
-          if (ctx.store.get().project?.id) { const asset = await ctx.api.uploadAssetDataUrl(ctx.store.get().project.id, f.name, f.image); if (asset.url) assetPaths.push(asset.url); }
+        let assetPath = f.assetPath;
+        if (f.image && !assetPath && projectId) {
+          const asset = await ctx.api.uploadAssetDataUrl(projectId, f.name, f.originalImage || f.image);
+          assetPath = asset.url;
         }
-        if (f.scanImages) images.push(...f.scanImages);
-        if (f.text || f.kind === 'doc' || f.kind === '文档') docs.push({ name: f.name, text: f.text || '', pages: f.pages, kindLabel: f.kindLabel || '文档', truncated: f.truncated, warning: f.warning });
+        const pathIndex = assetPath ? assetPaths.push(assetPath) - 1 : undefined;
+        if (f.image) {
+          attachmentLayout.push({ name: f.name, imageIndex: images.push(f.image) - 1, pathIndex });
+        }
+        if (f.text || f.kind === 'doc' || f.kind === '文档') {
+          const docIndex = docs.push({ name: f.name, text: f.text || '', pages: f.pages, kindLabel: f.kindLabel || '文档', truncated: f.truncated, warning: f.warning }) - 1;
+          attachmentLayout.push({ docIndex, scanStart: images.length, scanCount: f.scanImages?.length || 0 });
+          images.push(...(f.scanImages || []));
+        }
       }
-      const item = { text, images, options: { brief, assetPaths, docs } };
-      input.value = ''; files = []; grow(); renderFiles(); saveDraft(); slash.classList.add('hidden');
+      const item = { text, images, options: { brief: brief ?? draftBrief, assetPaths, docs, attachmentLayout } };
+      input.value = ''; files = []; draftBrief = undefined; grow(); renderFiles(); saveDraft(); slash.classList.add('hidden');
       if (loop.streaming) { queue.push(item); renderQueue(); } else { pinned = true; safe(() => loop.send(item.text, item.images, item.options)); }
     } catch (err) { notify(err); } finally { preparing = false; refreshControls(); }
   }
@@ -314,12 +412,12 @@ export async function init(ctx) {
     for (const image of msg.images || []) content.append(h('img', { src: image, alt: '附件图片' }));
     for (const doc of msg.docs || []) content.append(h('span', { class: 'agw-user-file', title: doc.warning || '' }, glyph('file-text', 14), doc.name + (doc.warning ? ' · ' + doc.warning : '')));
     const edit = iconButton('编辑消息', 'edit', () => { input.value = msg.content; grow(); input.focus(); refreshControls(); });
-    const revert = h('button', { type: 'button', class: 'agw-text-button agw-user-revert hidden', title: '回退工程和对话到本轮修改之前', onClick: () => safe(async () => {
-      const result = await versions.detail(msg.versions?.[loop.projectId]?.before, { rewind: true });
-      if (result?.conversation) { input.value = msg.content || ''; grow(); saveDraft(); refreshControls(); input.focus(); }
-    }) }, glyph('undo', 13), '回退到此处');
+    const revert = h('button', { type: 'button', class: 'agw-text-button agw-user-revert hidden', title: '回退工程并把本轮消息及附件带回输入框', onClick: () => safe(() =>
+      versions.detail(msg.versions?.[loop.projectId]?.before, { rewind: true })) }, glyph('undo', 13), '回退到此处');
     revert.classList.toggle('hidden', !msg.versions?.[loop.projectId]?.before);
-    thread.append(h('article', { class: 'agw-user', 'data-message-id': msg.id }, content, h('div', { class: 'agw-user-actions' }, revert, edit))); feedContent(); context();
+    const fork = h('button', { type: 'button', class: 'agw-text-button agw-user-fork', onClick: () => safe(() => branches.fork(msg.versions?.[loop.projectId]?.before)) }, glyph('copy', 13), '从此处分支');
+    fork.classList.toggle('hidden', !msg.versions?.[loop.projectId]?.before);
+    thread.append(h('article', { class: 'agw-user', 'data-message-id': msg.id }, content, h('div', { class: 'agw-user-actions' }, revert, fork, edit))); feedContent(); context();
   }
   async function undo(ids) {
     for (const id of [...ids].reverse()) {
@@ -330,6 +428,8 @@ export async function init(ctx) {
   }
   function newTurn(streaming, user = loop.messages.findLast((m) => m.role === 'user' && !m.versionEvent)) {
     removeWelcome(); const view = createThreadView({ streaming, scroll, resume: () => loop.resume(), undo,getElapsedMs:()=>user?.generationTiming?.elapsedMs||0,
+      rewind: () => safe(() => versions.detail(user?.versions?.[loop.projectId]?.after || user?.versions?.[loop.projectId]?.before, { rewind: true })),
+      fork: () => safe(() => branches.fork(user?.versions?.[loop.projectId]?.after || user?.versions?.[loop.projectId]?.before)),
       openProject: (id)=>{setFullscreen(false);ctx.navigate('#/p/'+encodeURIComponent(id));},
       versions: () => safe(() => versions.open({ ids: Object.values(user?.versions?.[loop.projectId] || {}).filter((v) => typeof v === 'string') })) });
     if (user) view.el.dataset.turnId = user.turnId || user.id;
@@ -354,9 +454,10 @@ export async function init(ctx) {
   }
   function errorView(error) {
     const node = h('div', { class: 'agw-error', role: 'alert' }, glyph('alert', 15), h('div', {}, h('strong', {}, '处理已暂停，进度已保留'), h('p', {}, error.message || String(error)),
-      h('button', { type: 'button', class: 'agw-text-button', onClick: () => { node.remove(); loop.resume(); } }, '继续处理'))); thread.append(node); scroll();
+      h('button', { type: 'button', class: 'agw-text-button', onClick: () => { node.remove(); loop.resume(); } }, error.retryLoad ? '重新读取会话' : '继续处理'))); thread.append(node); scroll();
   }
   loop = createAgentLoop(ctx, {
+    onSkillsChange() { skillPicker.refresh(); },
     onContext: (usage) => contextMeter.update(usage),
     onUserMessage(msg) { if (followFrame != null) cancelAnimationFrame(followFrame); followFrame = null; lastTurn?.disableResume(); activeTurn = null; lastTurn = null; plan.classList.add('hidden'); userMessage(msg); pinned = true; scroll(); },
     onAssistantStart(meta) { activeTurn ||= newTurn(true); lastTurn = activeTurn; if (meta.continued) activeTurn.continuation({}); activeTurn.beginRound();if(meta.agentRole)activeTurn.setRole(meta.agentRole); scroll(); },
@@ -373,15 +474,19 @@ export async function init(ctx) {
       if (activeTurn && !activeTurn.hasContent()) { activeTurn.el.remove(); lastTurn = null; }
       else activeTurn?.finish({}, { incomplete: true });
       activeTurn = null; errorView(error);
-    }, onLoadingChange() { refreshControls(); },
+    }, onLoadingChange() { refreshControls(); renderQueue(); },
     onSessionLoaded({ messages }) {
-      const key = draftKey(); if (sessionKey && sessionKey !== key) queue = []; sessionKey = key; renderQueue(); files = []; renderFiles(); plan.classList.add('hidden');
+      const draft = pendingRewindDraft;
+      pendingRewindDraft = null;
+      const key = draftKey(); if (sessionKey && sessionKey !== key) { queue = []; priorityItem = null; } sessionKey = key; renderQueue(); files = []; draftBrief = undefined; renderFiles(); plan.classList.add('hidden');
       input.value = read(key); grow(); replay(messages); refreshControls();
+      if (draft?.projectId === loop.projectId && draft.sessionId === loop.getState().sessionId) restoreDraft(draft.message);
     },
-    onNeedSetup(message) { if(message)ctx.toast.warn(message);safe(settings); }, onBeforeResume() { thread.querySelectorAll('.agw-error').forEach((e) => e.remove()); activeTurn = lastTurn?.reopen() || null; pinned = true; },
+    onNeedSetup(message) { if(message)ctx.toast.warn(message);safe(settings); }, onImageUnsupported(message) { ctx.toast.warn(message); }, onSessionReadRequired(message) { ctx.toast.warn(message); }, onBeforeResume() { thread.querySelectorAll('.agw-error').forEach((e) => e.remove()); activeTurn = lastTurn?.reopen() || null; pinned = true; },
     onVersionsChanged(msg) {
       const row = [...thread.querySelectorAll('.agw-user')].find((el) => el.dataset.messageId === msg.id);
       row?.querySelector('.agw-user-revert')?.classList.toggle('hidden', !msg.versions?.[loop.projectId]?.before);
+      row?.querySelector('.agw-user-fork')?.classList.toggle('hidden', !msg.versions?.[loop.projectId]?.before);
       lastTurn?.setVersion(!!msg.versions?.[loop.projectId]?.before);
     },
     onDeliveriesChanged(msg) { lastTurn?.setDeliveries(msg.deliveries); },
@@ -392,7 +497,8 @@ export async function init(ctx) {
       lastTurn?.refreshTiming();
       refreshControls();
       if (ctx.agentDeletedProjectId) { ctx.agentDeletedProjectId = null; ctx.navigate('#/'); return; }
-      if (!info.aborted && !info.error && queue.length) { const item = queue.shift(); renderQueue(); safe(() => loop.send(item.text, item.images, item.options)); }
+      const next = priorityItem || (!info.aborted && !info.error ? queue[0] : null);
+      if (next) safe(() => sendQueued(next));
     },
   });
   loop.setOptions(toolOptions()); ctx.agent = { loop }; attachMarkdownActions(thread);
@@ -418,6 +524,7 @@ export async function init(ctx) {
   ctx.bus.registerCommand('agent.toggleSkill', (p) => ({ ok: true, skills: loop.toggleSkill(typeof p === 'string' ? p : p?.id || p?.skillId) }));
   ctx.bus.registerCommand('backup.open',()=>{safe(()=>settings('backup'));return {ok:true};},{label:'WebDAV 云端备份',group:'文件',icon:'cloud'});
   ctx.bus.registerCommand('agent.openSettings', () => { safe(settings); return { ok: true }; }); ctx.bus.registerCommand('agent.openSearchSettings', () => { safe(() => settings('search')); return { ok: true }; });
+  if (hasBuiltinBrowser(ctx)) ctx.bus.registerCommand('agent.openBrowser', () => showBuiltinBrowser(ctx), { label: '内置浏览器', group: 'Agent', icon: 'globe' });
   ctx.bus.registerCommand('agent.attachFavorite', async ({element}={}) => {
     if(!element?.id||!element.html)return {ok:false,error:'收藏元素内容无效'};
     const text=JSON.stringify({favoriteId:element.id,name:element.name,w:element.w,h:element.h,type:element.type,description:element.description,html:element.html,css:element.css});
@@ -425,8 +532,10 @@ export async function init(ctx) {
     setOpen(true);renderFiles();refreshControls();return {ok:true};
   });
   ctx.bus.registerCommand('agent.openImageSettings', () => { safe(() => settings('image')); return { ok: true }; });
+  ctx.bus.registerCommand('agent.openUserInstructions', () => { safe(() => openUserInstructions(ctx)); return { ok: true }; });
   ctx.bus.registerCommand('agent.openSkills', () => { safe(async () => openManager(ctx, { catalog: await loadCatalog(ctx), enabled: loop.skills, onChange: (ids) => loop.setSkills(ids) })); return { ok: true }; });
   ctx.bus.registerCommand('agent.openVersions', () => { safe(() => versions.open()); return { ok: true }; });
+  ctx.bus.registerCommand('agent.openBranches', () => { safe(() => branches.open()); return { ok: true }; });
   ctx.bus.registerCommand('agent.fullscreen', (p={}) => setFullscreen(p.open ?? !fullscreen), {label:'全屏对话',group:'Agent',icon:'maximize'});
   ctx.bus.on('project:open', (data) => { closeMenu(); safe(() => loop.load((data.project || data).id)); context(); }); ctx.bus.on('route:change', (route) => { closeMenu(); if (route.name === 'library') safe(() => loop.load(null)); context(); });
   for (const event of ['selection:change', 'slide:change', 'deck:ready', 'project:renamed']) ctx.bus.on(event, context);

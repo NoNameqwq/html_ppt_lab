@@ -8,6 +8,7 @@ import { DEFAULT_IMAGE_SETTINGS, publicImageSettings, updateImageSettings, disco
 import { getToolDefinitionsForPermission, createToolExecutor } from '../app/js/agent/tools.js';
 import { buildNavigationHTML, resolveChapters } from '../app/js/core/deck-navigation.js';
 import { buildCreationBrief } from '../app/js/agent/blueprints.js';
+import { createBackend } from '../app/js/standalone/backend.js';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6bZsAAAAASUVORK5CYII=', 'base64');
 async function fixture(fn) {
@@ -72,11 +73,59 @@ test('Only API Key and Base URL are required; auto model and Agent-selected GPT 
 
 test('Base64 and URL images are verified, saved locally and use the configured model without optional-format assumptions', async () => fixture(async (f) => {
   const result = await generateImage({ config: f.config, body: { prompt: '知识生长的树' }, projectDir: f.root });
-  assert(result.url.startsWith('assets/generated-')); assert.equal(result.model, 'image-test'); assert.deepEqual(await fs.readFile(path.join(f.root, result.url)), png);
+  assert(result.url.startsWith('assets/chats/default/generated-')); assert.equal(result.model, 'image-test'); assert.deepEqual(await fs.readFile(path.join(f.root, result.url)), png);
   assert.deepEqual(f.requests[0].body, { model: 'image-test', prompt: '知识生长的树', n: 1 }); assert.equal(f.requests[0].url, '/v1/images/generations');
   f.mode('url'); const url = await generateImage({ config: { ...f.config, baseUrl: f.config.baseUrl + '/images/generations' }, body: { prompt: 'tree' }, projectDir: f.root });
   assert.equal(url.url, result.url); assert.equal(f.requests[1].url, '/v1/images/generations');
 }));
+
+test('Generated assets belong to their conversation without changing pages, and invalid session paths are rejected', async () => fixture(async (f) => {
+  await fs.writeFile(path.join(f.root, 'index.html'), '<html>Original deck</html>');
+  const a = await generateImage({ config: f.config, projectDir: f.root, body: { prompt: 'leaf', sessionId: 'chat-a' } });
+  const b = await generateImage({ config: f.config, projectDir: f.root, body: { prompt: 'leaf', sessionId: 'branch-b' } });
+  assert.equal(a.directory, 'assets/chats/chat-a'); assert.equal(b.directory, 'assets/chats/branch-b');
+  assert.equal(a.inserted, false); assert.equal(b.inserted, false); assert.notEqual(a.url, b.url);
+  assert.deepEqual(await fs.readFile(path.join(f.root, a.url)), png);
+  assert.deepEqual(await fs.readFile(path.join(f.root, b.url)), png);
+  assert.equal(await fs.readFile(path.join(f.root, 'index.html'), 'utf8'), '<html>Original deck</html>');
+  for (const sessionId of ['../escape', 'chat/a', '', 1]) await assert.rejects(
+    () => generateImage({ config: f.config, projectDir: f.root, body: { prompt: 'leaf', sessionId } }), /会话 ID/);
+  assert.equal(f.requests.length, 2);
+}));
+
+test('The image tool saves without an editor or target page and generic calls use the active conversation', async () => {
+  const previousFetch = globalThis.fetch, requests = [];
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body); requests.push({ url, body });
+    return Response.json({ ok: true, url: 'assets/chats/' + body.sessionId + '/generated-test.png', model: 'image-test' });
+  };
+  try {
+    const snapshot = { project: { id: 'demo' }, agent: { sessionId: 'chat-active' } };
+    const ctx = { store: { get: () => snapshot }, api: { getSettings: async () => ({ imageGeneration: { enabled: true } }) }, bus: { emit: () => {} } };
+    const tools = createToolExecutor(ctx);
+    const result = await tools.execute('deck_generate_image', { prompt: 'leaf', index: 0, x: 1, y: 2 }, { permission: 'edit', sessionId: 'branch-active' });
+    assert.equal(result.ok, true); assert.equal(result.inserted, false); assert.equal(result.sessionId, 'branch-active');
+    assert.equal(result.directory, 'assets/chats/branch-active'); assert.equal(result.path, result.url); assert(!result.opId);
+    assert.deepEqual(requests[0].body, { prompt: 'leaf', sessionId: 'branch-active' });
+    const viaAPI = await tools.execute('app_call_api', { operation: 'images.generate', body: { prompt: 'leaf', sessionId: 'wrong-chat' } }, { permission: 'edit' });
+    assert.equal(viaAPI.ok, true); assert.equal(requests[1].body.sessionId, 'chat-active');
+  } finally { globalThis.fetch = previousFetch; }
+});
+
+test('Standalone generation stores conversation assets and preserves page content across persistence', async () => {
+  const p = { meta: { id: 'demo' }, files: { 'index.html': '<html>Original</html>' }, chats: {}, versions: [] };
+  const state = { settings: { imageGeneration: { enabled: true, baseUrl: 'https://image.test/v1', apiKey: 'test', model: 'gpt-image-1.5', models: [], size: 'auto', quality: 'auto', responseFormat: 'auto' }, providers: [], agent: {} }, projects: { demo: p }, templates: {}, imports: {} };
+  let saved, calls = 0;
+  const backend = createBackend({ state, persist: async () => { saved = structuredClone(state); } }, { resources: {}, skills: [] }, async () => { calls++; return Response.json({ data: [{ b64_json: png.toString('base64') }] }); });
+  const generate = async sessionId => backend.fetch('/api/projects/demo/generate-image', { method: 'POST', body: JSON.stringify({ prompt: 'leaf', sessionId }) });
+  for (const sessionId of ['chat-a', 'branch-b']) {
+    const response = await generate(sessionId), asset = await response.json(); assert(response.ok, JSON.stringify(asset));
+    assert.equal(asset.directory, 'assets/chats/' + sessionId); assert.equal(asset.inserted, false);
+    assert(saved.projects.demo.files[asset.url].startsWith('data:image/png;base64,'));
+  }
+  assert.equal(saved.projects.demo.files['index.html'], '<html>Original</html>');
+  assert.equal((await generate('../escape')).status, 400); assert.equal(calls, 2);
+});
 
 test('Provider failure, empty output and non-raster content never create phantom assets', async () => fixture(async (f) => {
   for (const mode of ['error', 'empty', 'invalid']) { f.mode(mode); await assert.rejects(() => generateImage({ config: f.config, body: { prompt: 'tree' }, projectDir: f.root })); }

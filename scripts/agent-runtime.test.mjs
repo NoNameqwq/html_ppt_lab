@@ -13,11 +13,13 @@ import { createAgentLoop } from '../app/js/agent/loop.js';
 import { createToolExecutor, mutationProject } from '../app/js/agent/tools.js';
 import { sanitizeConversation, memoryChunks } from '../app/js/agent/conversation.js';
 import { messageTokens } from '../app/js/agent/conversation.js';
+import { estimateTokens } from '../app/js/agent/markdown.js';
+import { fitConversation, summarizeContext, MAX_CHAT_BYTES, requestBytes } from '../app/js/agent/context-recovery.js';
 import { contextUsage } from '../app/js/agent/context-usage.js';
 import { FALLBACK_SKILLS, initialSkillIds } from '../app/js/agent/skills.js';
 import { visualMessages } from '../app/js/agent/vision-messages.js';
 import { getToolDefinitionsForPermission } from '../app/js/agent/tools.js';
-import { buildSystemPrompt } from '../app/js/agent/prompt.js';
+import { buildSystemPrompt, buildSystemPromptSections } from '../app/js/agent/prompt.js';
 import { CREATIVE_MOTION_GUIDE } from '../app/js/agent/creative-motion.js';
 import { needsParallel3D,needsParallelSVG,prepareParallelBatch,createParallelRunner } from '../app/js/agent/parallel-agents.js';
 import {checkSvgArtifact} from '../app/js/agent/svg-artifact.js';
@@ -38,7 +40,9 @@ test('Task planning follows effort mode while fast generation preserves safety a
   });
   await f.loop.load('test');assert.equal(f.loop.getOptions().fastMode,false);
   const original=buildSystemPrompt(f.ctx,{permission:'full'});assert(original.includes('Task planning by effort and scope'));assert(original.includes('call update_plan before implementation'));assert(!original.includes('## Efficient execution'));assert(!original.includes('Optional starting directions'));
-  assert.equal(buildSystemPrompt(f.ctx,{permission:'full',fastMode:true}),original+'\n\n'+FAST_GENERATION_GUIDE);
+  const fastSections=buildSystemPromptSections(f.ctx,{permission:'full',fastMode:true});
+  assert.equal(fastSections.find(s=>s.id==='instructions').content,FAST_GENERATION_GUIDE);
+  assert.deepEqual(fastSections.filter(s=>s.id!=='instructions'),buildSystemPromptSections(f.ctx,{permission:'full'}));
   f.loop.setOptions({fastMode:true,reasoningEffort:'none'});assert((await f.loop.send('完成两个独立部分')).ok);
   assert.equal(seen.filter(p=>p.worker).length,2);assert(seen.every(p=>p.effort==='none'&&p.system.includes(FAST_GENERATION_GUIDE)&&p.system.includes('Extended thinking is disabled')));
   assert(seen.every(p=>p.system.includes('check only the affected part')&&p.system.includes('Do not skip a failed check')));
@@ -198,6 +202,173 @@ function checkpointFixture(handler, history = []) {
   f.ctx.bus.runCommand = async (name) => { writes.push({ name, snapshotsBeforeWrite: versions.length }); return { ok: true }; };
   return { ...f, versions, writes };
 }
+
+test('Browser screenshots reach vision models and can be saved as permission-checked project assets', async () => {
+  const image = 'data:image/jpeg;base64,/9j/example';
+  const f = checkpointFixture(async (payload, emit, _signal, round) => {
+    assert(payload.tools.some(tool => tool.function.name === 'browser_use'));
+    if (round === 1) return teamCall(emit, 'browser_use', { action: 'screenshot' });
+    assert(payload.messages.some(message => Array.isArray(message.content) &&
+      message.content.some(part => part.image_url?.url === image)));
+    emitText(emit, '已查看网页。');
+  });
+  let scope;
+  f.ctx.api.browser = async body => {
+    scope = body;
+    return { ok: true, open: true, url: 'https://example.com/', images: [image] };
+  };
+  f.snapshot.settings.providers[0].models[0].vision = true;
+  await f.loop.load('test');
+  assert((await f.loop.send('查看网页')).ok, f.hooks.errors.at(-1)?.message);
+  assert.deepEqual(scope, { projectId: 'test', sessionId: 'default', action: 'screenshot' });
+  assert.deepEqual(f.saved.at(-1).body.messages.find(message => message.name === 'browser_use').images, [image]);
+  assert.deepEqual(f.versions.map(version => version.options.kind), ['before', 'after']);
+
+  let uploads = 0;
+  f.ctx.api.uploadAssetDataUrl = async (projectId, filename, dataUrl) => {
+    uploads++;
+    assert.deepEqual([projectId, filename, dataUrl], ['test', 'browser-screenshot.jpg', image]);
+    return { url: 'assets/example.jpg' };
+  };
+  const tools = createToolExecutor(f.ctx);
+  assert.equal((await tools.execute('browser_save_screenshot', {}, { permission: 'read' })).ok, false);
+  assert.equal(uploads, 0);
+  const saved = await tools.execute('browser_save_screenshot', {}, { permission: 'edit' });
+  assert.equal(saved.path, 'assets/example.jpg');
+  assert.equal(uploads, 1);
+});
+
+test('The main Agent pauses after 256 tool rounds and can continue the same task', async () => {
+  const f = fixture(async (_payload, emit, _signal, round) => {
+    if (round > 256) {
+      emitText(emit, '已完成。');
+      return;
+    }
+    emit({ type: 'tool_calls', tool_calls: [{
+      id: 'state-' + round, type: 'function', function: { name: 'deck_get_state', arguments: '{}' },
+    }] });
+    emit({ type: 'done', finish_reason: 'tool_calls' });
+  });
+  await f.loop.load('test');
+  assert.equal((await f.loop.send('检查当前文稿')).ok, false);
+  assert.equal(f.requests.length, 256);
+  assert.equal(f.saved.at(-1).body.messages.filter(message => message.role === 'tool').length, 256);
+  assert.match(f.hooks.errors.at(-1).message, /256 轮处理上限/);
+  assert.equal((await f.loop.resume()).ok, true);
+  assert.equal(f.loop.messages.filter(message => message.role === 'user').length, 1);
+});
+
+test('Compose accepts 48 slides and rejects 49 without changing the deck', async () => {
+  const f = fixture(async () => {});
+  const pages = ['old slide'];
+  f.ctx.getEditor = () => ({ bridge: { async call(method, params) {
+    if (method === 'getState') return { slides: pages.slice() };
+    if (method === 'addSlide') pages.splice(params.afterIndex + 1, 0, '');
+    if (method === 'setSlideHtml') pages[params.index] = params.html;
+    return { ok: true };
+  } } });
+  const slides = Array.from({ length: 49 }, (_, i) => ({ name: '页面 ' + (i + 1), html: '<p>正文</p>' }));
+  const tools = createToolExecutor(f.ctx);
+  const schema = getToolDefinitionsForPermission('edit').find(tool => tool.function.name === 'deck_compose');
+  assert.equal(schema.function.parameters.properties.slides.maxItems, 48);
+  assert.match((await tools.execute('deck_compose', { slides }, { permission: 'edit' })).error, /48 页/);
+  assert.deepEqual(pages, ['old slide']);
+  const result = await tools.execute('deck_compose', { slides: slides.slice(0, 48) }, { permission: 'edit' });
+  assert.equal(result.pages, 48);
+  assert.equal(pages.length, 48);
+  assert.match(pages.at(-1), /data-name="页面 48"/);
+});
+
+test('Compose recovers valid stringified slides and rejects damaged content before any checkpoint', async () => {
+  const f = checkpointFixture(async () => {});
+  const changes = [];
+  f.ctx.getEditor = () => ({ bridge: { async call(method, params) {
+    if (method === 'getState') return { slides: [{ id: 'old' }] };
+    changes.push([method, params]);
+    return { ok: true };
+  } } });
+  const tools = createToolExecutor(f.ctx);
+  let checkpoints = 0;
+  const opts = { permission: 'edit', beforeMutation: () => { checkpoints++; } };
+  const broken = '[{"name":"Opening","elements":[{"type":"text","text":"Text with "unescaped quotes"."}]}]';
+  for (const slides of [undefined, [], broken, [null], [{ elements: '{}' }]]) {
+    const result = await tools.execute('deck_compose', { slides }, opts);
+    assert.equal(result.code, 'INVALID_COMPOSE_SLIDES', JSON.stringify(result));
+  }
+  assert.equal(checkpoints, 0);
+  assert.deepEqual(changes, []);
+  const slides = [{ name: 'Opening', elements: [{ type: 'text', text: 'Text with "escaped quotes".' }] }];
+  const result = await tools.execute('deck_compose', { slides: JSON.stringify(slides) }, opts);
+  assert.equal(result.pages, 1);
+  assert.equal(checkpoints, 1);
+  assert.match(changes.find(([method]) => method === 'setSlideHtml')[1].html, /Text with (?:&quot;|")escaped quotes(?:&quot;|")/);
+});
+
+test('Compose argument failures retry once and switch to incremental generation', async () => {
+  const f = checkpointFixture(async (request, emit, _signal, round) => {
+    const tool = name => request.tools.some(({ function: fn }) => fn.name === name);
+    const system = request.messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
+    const brokenSlides = '[{"name":"Opening","html":"<div class="title">Title</div>"}]';
+    if (round <= 2) {
+      assert(tool('deck_compose'));
+      assert.equal(request.toolChoice, undefined);
+      if (round === 2) assert.match(system, /arguments were rejected/);
+      teamCall(emit, 'deck_compose', { slides: brokenSlides });
+    } else if (round === 3) {
+      assert(!tool('deck_compose'));
+      assert.match(system, /Continue this deck incrementally/);
+      assert(tool('deck_add_slide'));
+      teamCall(emit, 'deck_add_slide', { afterIndex: 0, html: '<div>Title</div>' });
+    } else {
+      emitText(emit, '已写入演示。');
+    }
+  });
+  const writes = [];
+  f.ctx.getEditor = () => ({ bridge: { async call(method, params) {
+    if (method === 'getState') return { slides: [{ id: 'blank' }] };
+    writes.push([method, params]);
+    return { ok: true };
+  } } });
+  await f.loop.load('test');
+  const result = await f.loop.send('Create a presentation', [], { brief: 'Deliver two finished pages.' });
+  assert(result.ok, f.hooks.errors.at(-1)?.message);
+  assert.equal(f.requests.length, 4);
+  assert.deepEqual(writes, [['addSlide', { afterIndex: 0, html: '<div>Title</div>' }]]);
+  assert.deepEqual(f.versions.map(version => version.options.kind), ['before', 'after']);
+});
+
+test('Individually forced skills reload full source for main and parallel requests', async () => {
+  let reads = 0;
+  const f = fixture(async (p, cb) => {
+    const system = p.messages[0].content;
+    assert(system.includes('Required skill IDs: ["motion-design"]'));
+    assert(system.includes('FORCED_FULL_SOURCE_TAIL'));
+    assert(!system.includes('UNSELECTED_FORCE_SOURCE'));
+    if (p.sessionId.includes(':parallel:')) { emitText(cb, 'Complete independent implementation.'); return; }
+    if (!p.messages.some(m => m.role === 'tool')) parallelCall(cb);
+    else emitText(cb, '完成交付。');
+  }, [], { userInstructions: { skillForceOverrides: { 'motion-design': true, 'svg-illustration': true } } });
+  f.ctx.api.skills = async () => {
+    reads++;
+    return { skills: FALLBACK_SKILLS.filter(s => ['motion-design', 'svg-illustration'].includes(s.id)).map(s => ({
+      ...s, content: s.id === 'motion-design' ? 'Apply this complete skill. FORCED_FULL_SOURCE_TAIL' : 'UNSELECTED_FORCE_SOURCE',
+    })) };
+  };
+  await f.loop.load('test');
+  assert((await f.loop.send('完成两个独立实现部分')).ok);
+  assert(reads >= 4);
+  assert.equal(f.requests.filter(p => p.sessionId.includes(':parallel:')).length, 2);
+});
+
+test('Forced skill loading failures stop requests instead of silently using empty or cached source', async () => {
+  for (const broken of [async () => { throw Error('Skill service unavailable'); }, async () => ({ skills: [] })]) {
+    const f = fixture(async (_, cb) => emitText(cb, 'This must not run'), [], { userInstructions: { forceSkills: true } });
+    await f.loop.load('test'); f.ctx.api.skills = broken;
+    assert(!(await f.loop.send('使用强制 Skill')).ok);
+    assert.equal(f.requests.length, 0);
+    assert(f.hooks.errors.length);
+  }
+});
 function toolReply(cb, names = ['insert.text']) {
   cb({ type: 'tool_calls', tool_calls: names.map((name, i) => ({ id: 'write-' + i, type: 'function', function: { name: 'app_run_command', arguments: JSON.stringify({ name }) } })) });
   cb({ type: 'done', finish_reason: 'tool_calls' });
@@ -222,9 +393,21 @@ const parallelCall=(cb,tasks=parallelTasks)=>teamCall(cb,'agent_parallel',{tasks
 test('Expressive motion adds exactly one English guide only when explicitly enabled and preserves the original prompt when off',()=>{
   const ctx={store:{get:()=>({settings:{imageGeneration:{enabled:false}}})}},options={permission:'edit',vision:true,skillsText:'Existing design skill.'};
   const original=buildSystemPrompt(ctx,options),disabled=buildSystemPrompt(ctx,{...options,creativeMotion:false}),enabled=buildSystemPrompt(ctx,{...options,creativeMotion:true});
-  assert.equal(disabled,original);assert.equal(enabled,original+'\n\n'+CREATIVE_MOTION_GUIDE);assert(!/[\u3400-\u9fff]/.test(CREATIVE_MOTION_GUIDE));
+  assert.equal(disabled,original);assert.equal(enabled.replace(CREATIVE_MOTION_GUIDE+'\n\n',''),original);assert.equal(enabled.split(CREATIVE_MOTION_GUIDE).length,2);assert(!/[\u3400-\u9fff]/.test(CREATIVE_MOTION_GUIDE));
   for(const phrase of ['Transitions MUST','Element animation MUST','A real timeline MUST','Background design MUST','deck_set_custom_transition','deck_get_timeline','deck_set_timeline','deck_generate_image','SVG creativity','3D creativity','prefers-reduced-motion','do not enable it','narrowly scoped follow-up'])assert(enabled.includes(phrase),phrase);
   assert(enabled.includes('Image generation is disabled'));assert(original.includes('Image generation is disabled'));
+});
+
+test('System prompt sections keep policies, capabilities, optional guidance, verification and live context in order', () => {
+  const snapshot = { project: { id: 'example' }, settings: { imageGeneration: { enabled: true }, agent: { userInstructions: { enabled: true, prompt: 'User preference marker', skills: [] } } } };
+  const ctx = { store: { get: () => snapshot } };
+  const sections = buildSystemPromptSections(ctx, { permission: 'read', roleInstructions: 'Current role marker', skillsText: 'Enabled skill marker', creativeMotion: true, fastMode: true, webSearch: true, visualTask: 'draw svg' });
+  assert.deepEqual(sections.map(s => s.id), ['execution', 'authoring', 'capabilities', 'instructions', 'verification', 'context']);
+  assert(sections[0].content.includes('Read only.')); assert(sections[0].content.includes('Current role marker'));
+  assert(sections[1].content.includes('## Editable HTML contract')); assert(sections[1].content.includes('## Autonomous chapter navigation'));
+  assert(sections[2].content.includes('## SVG illustration:')); assert(sections[2].content.includes('## Image assets')); assert(sections[2].content.includes('does not insert images'));
+  assert(sections[3].content.includes('Enabled skill marker')); assert(sections[3].content.includes('User preference marker')); assert(sections[3].content.includes(CREATIVE_MOTION_GUIDE));
+  assert(sections[4].content.includes('## Visual feedback loop')); assert(sections[5].content.includes('"id":"example"'));
 });
 
 test('Expressive motion toggles real model requests and context estimates without enabling image generation or changing permissions',async()=>{
@@ -319,11 +502,11 @@ test('A worker that repeatedly omits SVG source cannot become a successful final
   const w=f.loop.messages[0].parallelRuns[0].workers[0];assert.equal(w.status,'error');assert.equal(w.artifactChecks.ok,false);assert(w.error.includes('完整可用源码'));
 });
 
-test('Read-only SVG requests and focused label fixes do not force delegation or create checkpoints',async()=>{
+test('Read-only SVG requests and focused label fixes keep rewind snapshots without forcing delegation',async()=>{
   for(const read of [true,false]){
     const f=checkpointFixture(async(p,cb)=>{assert.notEqual(p.toolChoice?.function?.name,'agent_parallel');emitText(cb,'Focused analysis.');});
     await f.loop.load('test');if(read)f.loop.setOptions({permission:'read'});
-    assert((await f.loop.send(read?'绘制完整 SVG 电机结构图':'只调整 SVG 标签字号')).ok);assert.equal(f.versions.length,0);
+    assert((await f.loop.send(read?'绘制完整 SVG 电机结构图':'只调整 SVG 标签字号')).ok);assert.equal(f.versions.length,2);
   }
 });
 
@@ -343,7 +526,7 @@ test('3D authoring dispatches genuinely overlapping read-only workers using the 
     else {const batch=JSON.parse(result.content);if(!batch.complete){teamCall(cb,'agent_wait',{batchId:batch.batchId});return;}assert(batch.ok);assert.equal(batch.workers.length,2);assert(batch.workers.every(w=>w.status==='complete'));emitText(cb,'Ready to integrate generated code.');}
   });
   await f.loop.load('test');f.loop.setOptions({reasoningEffort:'medium'});assert((await f.loop.send('请构建一个可交互的 3D 结构')).ok);
-  assert.equal(workers,2);assert.equal(f.writes.length,0);assert.equal(f.versions.length,0);
+  assert.equal(workers,2);assert.equal(f.writes.length,0);assert.equal(f.versions.length,2);
   assert.equal(f.loop.getState().usage.total_tokens,30);
   const turn=f.saved.at(-1).body.messages.find(m=>m.role==='user');assert.equal(turn.parallelRuns[0].status,'complete');assert.equal(turn.parallelRuns[0].workers[0].content,'Complete geometry code');
 });
@@ -395,7 +578,7 @@ test('Parallel artifacts continue across output limits and cache successful sibl
     }
     if(++lead<3)parallelCall(cb);else emitText(cb,'All outputs retained and ready');
   });
-  await f.loop.load('test');assert((await f.loop.send('Build a 3D structure')).ok);
+  await f.loop.load('test');const sent=await f.loop.send('Build a 3D structure');assert(sent.ok,JSON.stringify(f.hooks.errors));
   assert.deepEqual(counts,{geometry:2,interaction:2});assert.equal(f.loop.messages[0].parallelRuns.length,1);
   const result=JSON.parse(f.loop.messages.filter(m=>m.name==='agent_parallel').at(-1).content);
   assert(result.ok);assert.equal(result.workers[0].content,'Code prefix, code tail');assert.equal(result.workers[1].content,'Recovered interaction');
@@ -597,7 +780,7 @@ test('Reviewer cannot mutate through a nested dispatcher or approve without insp
     if(n===6)teamTransfer(cb,'complete');if(n===7)emitText(cb,'检查完成');
   });
   await f.loop.load('test');f.loop.setOptions({reasoningEffort:'xhigh'});assert((await f.loop.send('只读审查')).ok);
-  assert.equal(f.writes.length,0);assert.equal(f.versions.length,0);
+  assert.equal(f.writes.length,0);assert.equal(f.versions.length,2);
 });
 
 test('Interrupted worker resumes with its configured model and never repeats a successful mutation',async()=>{
@@ -713,9 +896,9 @@ test('Mutating turns capture a single before checkpoint and a complete after che
   assert.equal(user.versions.test.before, 'version-0'); assert.equal(user.versions.test.after, 'version-1'); assert.equal(user.versions.test.pending, undefined);
   assert.equal(user.deliveries[0].versionId,'version-1');assert.equal(user.deliveries[0].status,'complete');
 });
-test('Read-only turns and denied nested API calls create no project checkpoints', async () => {
+test('Read-only turns keep conversation snapshots while denied API calls create no mutation checkpoints', async () => {
   const f = checkpointFixture(async (_, cb) => emitText(cb, '仅建议，不修改'));
-  await f.loop.load('test'); await f.loop.send('先分析'); assert.equal(f.versions.length, 0);
+  await f.loop.load('test'); await f.loop.send('先分析'); assert.equal(f.versions.length, 2);
   let checkpoints = 0;
   const result = await createToolExecutor(f.ctx).execute('app_call_api', { operation: 'files.write', body: { content: 'x' } }, { permission: 'read', beforeMutation: async () => { checkpoints++; } });
   assert.equal(result.ok, false); assert.equal(checkpoints, 0);
@@ -760,6 +943,32 @@ test('Rewinding reloads the restored conversation without flushing the discarded
   await f.loop.restoreCheckpoint('version', { rewindConversation: true });
   assert.equal(f.loop.messages.at(-1).content, '历史回复'); assert.equal(f.saved.length, restoreIndex);
   await f.loop.flush(); assert.equal(f.saved.at(-1).body.messages.at(-1).content, '历史回复');
+});
+test('A failed post-rewind read blocks writes until the committed snapshot can be reloaded', async () => {
+  const f = checkpointFixture(async (_, cb) => emitText(cb, '未来回复'));
+  await f.loop.load('test');
+  await f.loop.send('未来请求');
+  let restores = 0, unavailable = true;
+  f.ctx.api.restoreVersion = async () => {
+    restores++;
+    f.ctx.api.getChat = async () => {
+      if (unavailable) throw new Error('Connection lost');
+      return { messages: [{ role: 'user', content: '历史请求' }], skills: [] };
+    };
+    return { ok: true, conversation: { sessionId: 'default' } };
+  };
+  const result = await f.loop.restoreCheckpoint('version', { rewindConversation: true });
+  assert(result.conversationError);
+  assert.equal(f.loop.messages.at(-1).content, '未来回复');
+  assert.equal(f.hooks.errors.at(-1).retryLoad, true);
+  const saves = f.saved.length;
+  await f.loop.flush();
+  assert.equal((await f.loop.send('不得写回旧会话')).ok, false);
+  assert.equal(f.saved.length, saves);
+  unavailable = false;
+  assert.equal(await f.loop.resume(), true);
+  assert.equal(f.loop.messages.at(-1).content, '历史请求');
+  assert.equal(restores, 1);
 });
 test('Resume finalizes a pending checkpoint after browser interruption even if no additional writes are needed', async () => {
   const f = checkpointFixture(async (_, cb) => emitText(cb, '确认当前状态，已完成'), [
@@ -869,6 +1078,106 @@ test('Context compaction keeps real model memory and the current user turn', asy
   assert(f.requests.every(r => r.model === 'test' && r.providerId === 'test'));
 });
 
+test('Automatic compaction reserves memory space before output for a small context window', async () => {
+  const f = fixture(async (p, cb) => {
+    assert(p.tools.length, 'a short fresh request does not need summarization');
+    assert(p.maxTokens < 8192, 'large fixed instructions must reduce the output reservation');
+    assert(messageTokens(p.messages) + estimateTokens(JSON.stringify(p.tools)) + p.maxTokens <= 32000 * .9);
+    emitText(cb, '继续完成。');
+  }, [], { contextLimit: 32000 });
+  await f.loop.load('test');
+  assert((await f.loop.send('继续制作页面')).ok);
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.hooks.errors.length, 0);
+});
+
+test('An active generation automatically compacts between tool rounds without replaying successful changes', async () => {
+  let main = 0, compacted = 0;
+  const f = checkpointFixture(async (p, cb) => {
+    if (!p.tools.length) { compacted++; emitText(cb, '已插入文本，保留中文标题，接着交付，不重复修改。'); return; }
+    if (++main === 1) { cb({ type: 'delta', content: '已完成的设计与实现说明。'.repeat(10000) }); toolReply(cb); return; }
+    assert(p.messages.some(m => m.role === 'system' && m.content.includes('已插入文本')));
+    emitText(cb, '已完成交付。');
+  });
+  f.snapshot.settings.agent.contextLimit = 32000;
+  await f.loop.load('test');
+  assert((await f.loop.send('制作页面并交付')).ok);
+  assert(compacted > 0); assert.equal(main, 2); assert.equal(f.writes.length, 1);
+  assert(f.loop.getState().foldedCount > 0);
+  assert(f.loop.messages.some(m => m.role === 'assistant' && m.content.length > 100000));
+  assert.equal(f.hooks.errors.length, 0);
+});
+
+test('An upstream context error code automatically triggers compaction even with a generic message', async () => {
+  let main = 0;
+  const f = fixture(async (p, cb) => {
+    if (!p.tools.length) { emitText(cb, '保留任务与当前进度。'); return; }
+    if (++main === 1) { cb({ type: 'error', error: { code: 'context_length_exceeded', message: 'Request rejected' } }); return; }
+    emitText(cb, '压缩后自动继续。');
+  });
+  await f.loop.load('test');
+  assert((await f.loop.send('继续制作')).ok);
+  assert.equal(main, 2); assert(f.loop.getState().summary); assert.equal(f.hooks.errors.length, 0);
+});
+
+test('Request byte limits compact large visual history even when token estimates fit', async () => {
+  const data = 'data:image/png;base64,' + 'A'.repeat(MAX_CHAT_BYTES + 100);
+  const history = [{ role: 'user', content: 'Inspect this image', images: [data] }, { role: 'assistant', content: 'Read the old image' }, { role: 'user', content: 'Continue with the layout' }];
+  let compacted = 0;
+  const fitted = await fitConversation({ history, prefix: [{role:'system',content:'Keep working'}], tools: [], budget: 1000000,
+    render: items => items.map(m => m.images ? { role: m.role, content: [{type:'text',text:m.content},{type:'image_url',image_url:{url:m.images[0]}}] } : {role:m.role,content:m.content}),
+    summarize: async () => { compacted++; return 'Keep the original layout and continue.'; } });
+  assert(compacted > 0); assert(requestBytes(fitted.messages) < MAX_CHAT_BYTES);
+  assert.equal(history[0].images[0], data);
+  assert(fitted.messages.some(m => m.content === 'Continue with the layout'));
+});
+
+test('Compacting the current turn keeps affordable clipboard images in the model request', async () => {
+  const image = 'data:image/png;base64,' + 'A'.repeat(1300000);
+  const turn = { role: 'user', id: 'clipboard', content: 'Inspect this screenshot. ' + 'context '.repeat(10000), images: [image] };
+  const fitted = await fitConversation({
+    history: [turn], prefix: [{ role: 'system', content: 'Keep working' }], tools: [],
+    budget: 14000, maxBytes: 2 * 1024 * 1024,
+    render: items => items.map(m => ({ role: m.role, content: [
+      { type: 'text', text: m.content }, { type: 'image_url', image_url: { url: m.images[0] } },
+    ] })),
+    summarize: async () => 'Inspect the attached screenshot.',
+  });
+  const content = fitted.messages.find(m => m.role === 'user').content;
+  assert(content[0].text.includes('Inspect this screenshot.'));
+  assert.equal(content[1].image_url.url, image);
+  assert.equal(fitted.summary.through, 1);
+});
+
+test('HTTP 413 resumes automatically after compression without repeating completed mutations', async () => {
+  let main = 0, compacted = 0;
+  const f = checkpointFixture(async (p, cb) => {
+    if (!p.tools.length) { compacted++; emitText(cb, 'Text was inserted successfully. Continue without repeating it.'); return; }
+    if (++main === 1) { toolReply(cb); return; }
+    if (main === 2) { cb({type:'error',status:413,message:'请求体过大'}); return; }
+    assert(p.messages.some(m => String(m.content).includes('Text was inserted successfully')));
+    emitText(cb, '完成。');
+  });
+  await f.loop.load('test'); assert((await f.loop.send('完成修改')).ok);
+  assert.equal(f.writes.length, 1); assert(compacted > 0); assert.equal(main, 3); assert.equal(f.hooks.errors.length, 0);
+});
+
+test('The summarizer reduces its byte budget after HTTP 413 and preserves every source segment', async () => {
+  const source = 'Detailed conversation record. '.repeat(100000), accepted = [], rejected = [];
+  const result = await summarizeContext({ source, targetTokens: 1024,
+    model: { providerId: 'memory', model: 'large-window', info: { contextLength: 10000000 } },
+    request: async (payload, cb) => {
+      const bytes = requestBytes(payload);
+      if (bytes > 1100000) { rejected.push(bytes); throw Object.assign(new Error('请求体过大'), { status: 413 }); }
+      accepted.push(payload.messages[1].content.split('【接续记录】\n')[1]);
+      emitText(cb, 'Preserved goals and progress.');
+    } });
+  assert(rejected.length >= 2);
+  assert(rejected[1] < rejected[0]);
+  assert.equal(accepted.join(''), source);
+  assert.equal(result, 'Preserved goals and progress.');
+});
+
 test('Compaction selection follows the active role by default and validates explicit services without requiring tools', () => {
   const providers = [{ id: 'chat', keySet: true, model: 'default-chat' }, { id: 'memory', keySet: true, model: 'small-text', models: [{ id: 'small-text', tools: false }] }];
   const active = { providerId: 'chat', model: 'active-reviewer' };
@@ -910,15 +1219,14 @@ test('A dedicated small-window summarizer receives every history segment within 
   assert.equal(f.loop.getState().usage.total_tokens, segments.length * 15);
 });
 
-test('Failed or truncated compaction keeps old memory and full history; retry uses the newly selected compression model', async () => {
+test('A rejected compression model keeps old memory and full history; retry uses the newly selected model', async () => {
   const history = Array.from({ length: 10 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: ('历史记录' + i).repeat(1500) }));
-  for (const failure of ['error', 'length', 'empty']) {
+  {
     let failing = true;
     const f = fixture(async (p, cb) => {
       if (p.tools.length) { emitText(cb, '继续完成'); return; }
       if (failing) {
-        if (failure === 'error') cb({ type: 'error', message: 'invalid summarizer key', status: 401 });
-        else emitText(cb, failure === 'length' ? '不完整记忆' : '', failure === 'length' ? 'length' : 'stop');
+        cb({ type: 'error', message: 'invalid summarizer key', status: 401 });
       } else { assert.equal(p.model, 'replacement-memory'); emitText(cb, '用户偏好与未完成事项已保留。'); }
     }, history, { contextLimit: 32000, compaction: { model: 'broken-memory' } });
     const originalSummary = { through: 2, text: '先前有效记忆', model: 'previous-model' };
@@ -932,6 +1240,31 @@ test('Failed or truncated compaction keeps old memory and full history; retry us
     assert.equal(f.requests.at(-1).model, 'test'); assert.equal(f.loop.getState().summary.model, 'replacement-memory');
     assert.equal(f.loop.messages.length, history.length + 2);
   }
+});
+
+test('Truncated and empty summaries retry and fall back to saved excerpts without blocking the conversation', async () => {
+  const history = [{ role: 'user', content: 'Project constraints. ' + 'Long history. '.repeat(9000) },
+    { role: 'assistant', content: 'Saved result.' }];
+  let compression = 0;
+  const f = fixture(async (payload, cb) => {
+    if (payload.tools.length) {
+      assert(payload.messages.some(message => String(message.content).includes('Local memory excerpts')));
+      assert.equal(payload.messages.at(-1).content, '继续工作');
+      emitText(cb, '已继续。');
+      return;
+    }
+    if (++compression === 1) emitText(cb, 'Partial output must not be committed', 'length');
+    else {
+      assert.equal(payload.stream, false);
+      emitText(cb, '');
+    }
+  }, history, { contextLimit: 32000 });
+  await f.loop.load('test');
+  assert((await f.loop.send('继续工作')).ok);
+  assert.equal(compression, 3);
+  assert(!f.loop.getState().summary.text.includes('Partial output must not be committed'));
+  assert.equal(f.loop.messages[0].content, history[0].content);
+  assert.equal(f.loop.messages.at(-1).content, '已继续。');
 });
 
 test('Stopping compaction never commits a partial memory or loses messages', async () => {

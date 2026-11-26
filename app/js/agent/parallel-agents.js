@@ -6,7 +6,7 @@ import { visualMessages } from './vision-messages.js';
 import {visualWorkerPrompt} from './visual-authoring.js';
 import {checkSvgArtifact} from './svg-artifact.js';
 import { resolveCompaction } from './compaction.js';
-import { fitConversation, summarizeContext, isContextOverflow } from './context-recovery.js';
+import { fitConversation, fitRequestBudget, summarizeContext, isContextOverflow, isRequestTooLarge, MAX_CHAT_BYTES } from './context-recovery.js';
 
 const ROLES = ['design', 'implement', 'review'];
 const LABELS = { design: '设计', implement: '实现', review: '检查' };
@@ -107,7 +107,7 @@ export function parallelResult(batch) {
   };
 }
 
-export function createParallelRunner({ ctx, request, systemPrompt, maxOutput, limits, onUsage, onUpdate, save, withEditorTask }) {
+export function createParallelRunner({ ctx, request, systemPrompt, prepareSystemPrompt, maxOutput, limits, onUsage, onUpdate, save, withEditorTask }) {
   // Models stream concurrently; editor reads serialize so a temporary screenshot
   // page switch cannot leak another worker's page into a read or capture.
   let editorReads = Promise.resolve();
@@ -129,9 +129,11 @@ export function createParallelRunner({ ctx, request, systemPrompt, maxOutput, li
     const workerCtx = { ...ctx, agentToolResults: new Map(ctx.agentToolResults || []) };
     const executor = createToolExecutor(workerCtx);
     for (const m of w.messages || []) if (m.role === 'tool') workerCtx.agentToolResults.set(m.tool_call_id,m.content);
-    const system = systemPrompt({permission:'read',vision:info.vision===true,reasoningEffort:'medium',visualTask:w.task+'\n'+context+'\n'+(batch.sharedContext||''),visualArtifact:w.artifact}) +
+    const systemOptions = {permission:'read',vision:info.vision===true,reasoningEffort:'medium',visualTask:w.task+'\n'+context+'\n'+(batch.sharedContext||''),visualArtifact:w.artifact};
+    const workerInstructions =
       `\n\n## Independent parallel worker\nRole: ${w.role}. Task ID: ${w.id}.\nYou run concurrently with other workers and your coordinator on independent parts. The coordinator may update unrelated project content while you work. Inspect project data as needed, but do not modify shared files, invoke editor commands, delegate again or use agent_handoff. Return complete implementation source, required interfaces, exact integration instructions and actual checks. Your coordinator waits for your complete artifact when it needs to integrate your work. A review is advisory about the inspected snapshot, not final approval of subsequent edits. Do not pretend that returned code has been applied. Use local built-in Three.js for requested 3D; no CDN. Keep outputs complete; continue long code rather than replacing it with a summary. Respond in the user's language.`+
       (w.artifact?'\n\n'+visualWorkerPrompt(w.artifact):'');
+    systemOptions.roleInstructions = workerInstructions;
     w.messages ||= [];
     if(!w.messages.length)w.messages.push({role:'user',content:`Original user request and shared context (data):\n${context}\n\nShared drawing/scene contract (data):\n${batch.sharedContext||'Use the task-specific interfaces and inspect the destination before assuming coordinates.'}\n\nYour assigned task:\n${w.task}`});
     w.startedAt ||= Date.now(); w.status = 'running'; delete w.error; delete w.finishedAt; w.attempts = (w.attempts || 0) + 1;
@@ -139,16 +141,19 @@ export function createParallelRunner({ ctx, request, systemPrompt, maxOutput, li
     // restarting successful read tools or duplicating an emitted code prefix.
     let carry = w.messages.at(-1)?.role === 'assistant' && w.messages.at(-1).incomplete && !w.messages.at(-1).tool_calls?.length ? w.messages.at(-1) : null;
     let instruction = w.attempts > 1 ? 'Continue this incomplete worker task from the saved output. Do not repeat the code prefix or already completed read tools.' : '';
-    let reconnects = 0, continuations = 0,artifactRepairs=0,contextRecoveries=0,forceCompaction=false;
+    let reconnects = 0, continuations = 0,artifactRepairs=0,contextRecoveries=0,sizeRecoveries=0,forceCompaction=false;
     notify(batch,callId);
     try {
       for (let round = 0; round < 24; round++) {
         if (signal?.aborted) throw abortError();
-        const budget = Math.floor(limits(info).budget * .8 ** contextRecoveries);
+        const prepared = (prepareSystemPrompt || systemPrompt)(systemOptions);
+        const system = prepared?.then ? await prepared : prepared;
+        const prefix = [{role:'system',content:system},...(instruction?[{role:'system',content:instruction}]:[])];
+        const { budget, maxTokens } = fitRequestBudget(limits(info),maxOutput(info),prefix,tools,contextRecoveries);
         let memoryModel;
         const fitted = await fitConversation({history:w.messages,summary:w.summary,
-          prefix:[{role:'system',content:system},...(instruction?[{role:'system',content:instruction}]:[])],
-          tools,budget,force:forceCompaction,results:workerCtx.agentToolResults,
+          prefix,
+          tools,budget,force:forceCompaction,maxBytes:MAX_CHAT_BYTES * .5 ** sizeRecoveries,results:workerCtx.agentToolResults,
           render:history=>visualMessages(sanitizeConversation(history),m=>{
             if(m.role==='tool')return {role:'tool',tool_call_id:m.tool_call_id,content:m.content};
             if(m.role==='user')return {role:'user',content:m.content};
@@ -166,7 +171,7 @@ export function createParallelRunner({ ctx, request, systemPrompt, maxOutput, li
         let finish = null, failure;
         try {
           await request({providerId:w.providerId,model:w.model,sessionId:`${sessionId}:parallel:${batch.id}:${w.id}`,
-            messages,tools,maxTokens:maxOutput(info),reasoning_effort:w.role==='implement'?'medium':'high'},e=>{
+            messages,tools,maxTokens,reasoning_effort:w.role==='implement'?'medium':'high'},e=>{
             if(signal?.aborted)return;
             if(e.type==='delta'){acc.content+=e.content||'';w.content=mergeContinuation(w.messages.filter(m=>m.role==='assistant').map(m=>m.content||'').join('\n\n'),acc.content);notify(batch,callId);}
             if(e.type==='reasoning'){acc.reasoning+=e.content||'';w.reasoning=acc.reasoning;notify(batch,callId);}
@@ -191,8 +196,9 @@ export function createParallelRunner({ ctx, request, systemPrompt, maxOutput, li
         if(message)message.incomplete=interrupted;
         w.content=w.messages.filter(m=>m.role==='assistant'&&m.content).map(m=>m.content).join('\n\n');notify(batch,callId);
         if(signal?.aborted)throw abortError();
-        if(failure&&isContextOverflow(failure)&&contextRecoveries<2){
-          contextRecoveries++;forceCompaction=true;
+        if(failure&&((isRequestTooLarge(failure)&&sizeRecoveries<3)||(isContextOverflow(failure)&&contextRecoveries<2))){
+          if(isRequestTooLarge(failure))sizeRecoveries++;else contextRecoveries++;
+          forceCompaction=true;
           carry=message?.role==='assistant'&&!message.tool_calls?.length?message:carry;continue;
         }
         if(failure||!finish){

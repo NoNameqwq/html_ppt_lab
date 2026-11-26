@@ -879,22 +879,38 @@
   function applyPixelSize(el, value, range) {
     var size = parseFloat(value);
     if (!isFinite(size) || size < 1 || size > 1000) throw new Error('字号应在 1–1000 像素之间');
+    applyTextProperty(el, 'font-size', size + 'px', range);
+  }
+
+  function applyFontFamily(el, value, range) {
+    var family = String(value).trim();
+    if (!CSS.supports('font-family', family)) throw new Error('字体设置无效');
+    applyTextProperty(el, 'font-family', family, range);
+  }
+
+  function applyTextProperty(el, property, value, range) {
+    var protectedContent = 'svg,.katex,[data-wds-latex]';
+    if (el.closest(protectedContent)) {
+      el.style.setProperty(property, value, 'important');
+      return;
+    }
     var whole = !range || range.collapsed;
     if (range && !whole) {
       var full = document.createRange(); full.selectNodeContents(el);
       whole = range.toString() === full.toString();
     }
     if (whole) {
-      el.style.setProperty('font-size', size + 'px', 'important');
+      el.style.setProperty(property, value, 'important');
       Array.from(el.querySelectorAll('*')).forEach(function (node) {
-        if (node.closest('svg,.katex,[data-wds-latex]')) return;
-        node.style.setProperty('font-size', 'inherit', 'important'); node.removeAttribute('size');
+        if (node.closest(protectedContent) || !node.style) return;
+        node.style.setProperty(property, 'inherit', 'important');
+        if (property === 'font-size') node.removeAttribute('size');
       });
       return;
     }
     var pieces = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT), node;
     while ((node = walker.nextNode())) {
-      if (!node.textContent || !range.intersectsNode(node) || node.parentElement.closest('svg,.katex,[data-wds-latex]')) continue;
+      if (!node.textContent || !range.intersectsNode(node) || node.parentElement.closest(protectedContent)) continue;
       var start = node === range.startContainer ? range.startOffset : 0;
       var end = node === range.endContainer ? range.endOffset : node.length;
       if (end > start) pieces.push({ node: node, start: start, end: end });
@@ -903,7 +919,7 @@
     pieces.forEach(function (p) {
       if (p.end < p.node.length) p.node.splitText(p.end);
       var text = p.start ? p.node.splitText(p.start) : p.node;
-      var span = document.createElement('span'); span.style.setProperty('font-size', size + 'px', 'important');
+      var span = document.createElement('span'); span.style.setProperty(property, value, 'important');
       text.parentNode.insertBefore(span, text); span.appendChild(text); spans.push(span);
     });
     if (spans.length) {
@@ -922,11 +938,12 @@
       var range = t.range, sel = window.getSelection();
       if (range && el.contains(range.commonAncestorContainer)) { sel.removeAllRanges(); sel.addRange(range); }
       if (command === 'fontSize') applyPixelSize(el, value, range);
+      else if (command === 'fontFamily') applyFontFamily(el, value, range);
       else if (command === 'lineHeight') el.style.lineHeight = String(value);
       else if (command === 'letterSpacing') el.style.letterSpacing = String(value);
       else {
         document.execCommand('styleWithCSS', false, true);
-        if (!document.execCommand(command === 'fontFamily' ? 'fontName' : command, false, value == null ? null : String(value))) return { ok: false };
+        if (!document.execCommand(command, false, value == null ? null : String(value))) return { ok: false };
       }
     } catch (e) { return { ok: false, error: e.message }; }
     var after = { html: el.innerHTML, cssText: el.style.cssText }, op = null;
@@ -961,17 +978,24 @@
   function setStyles(elementId, styles) {
     var el = elementById(elementId);
     if (!el) throw new Error('元素不存在');
-    if (styles && styles['font-size']) {
+    var size = styles && styles['font-size'], family = styles && styles['font-family'];
+    if (size || family) {
       if (textEdit && textEdit.el === el) commitTypedText();
       var before = { html: el.innerHTML, cssText: el.style.cssText };
-      applyPixelSize(el, styles['font-size']);
-      Object.keys(styles).forEach(function (k) { if (k !== 'font-size') el.style.setProperty(k, String(styles[k])); });
+      if (family) applyFontFamily(el, family);
+      if (size) applyPixelSize(el, size);
+      Object.keys(styles).forEach(function (key) {
+        if ((key === 'font-size' && size) || (key === 'font-family' && family)) return;
+        var value = styles[key];
+        if (value == null || value === '') el.style.removeProperty(key);
+        else el.style.setProperty(key, String(value));
+      });
       var after = { html: el.innerHTML, cssText: el.style.cssText };
       if (before.html === after.html && before.cssText === after.cssText) return { op: null };
-      var sizeOp = makeOp({ type: 'style', label: '修改字号', elementId: elementId, slideIndex: slideIndexOf(el), before: before, after: after });
+      var textOp = makeOp({ type: 'style', label: family ? '修改字体' : '修改字号', elementId: elementId, slideIndex: slideIndexOf(el), before: before, after: after });
       if (textEdit && textEdit.el === el) textEdit.beforeHtml = after.html;
-      emitChange(sizeOp); emit('selectionchange', { selection: selectionInfo(el) });
-      return { op: sizeOp };
+      emitChange(textOp); emit('selectionchange', { selection: selectionInfo(el) });
+      return { op: textOp };
     }
     var op = styleMutate(el, function (node) {
       Object.keys(styles || {}).forEach(function (key) {
@@ -1940,7 +1964,7 @@
     cleanThreeTree(clone);
     var bridge = clone.querySelector('#wpx-bridge');
     if (bridge) bridge.remove();
-    clone.querySelectorAll('#wpx-edit-style,[data-wpx-timeline-layer],[data-wpx-timeline-legacy]').forEach(function (n) { n.remove(); });
+    clone.querySelectorAll('#wpx-edit-style,[data-wds-project-fonts="live"],[data-wpx-timeline-layer],[data-wpx-timeline-legacy]').forEach(function (n) { n.remove(); });
     clone.querySelectorAll('[contenteditable]').forEach(function (n) {
       n.removeAttribute('contenteditable');
       n.removeAttribute('spellcheck');
@@ -2028,7 +2052,7 @@
     var clone = document.documentElement.cloneNode(true);
     cleanThreeTree(clone);
     clone.querySelectorAll('#wpx-bridge').forEach(function (n) { n.remove(); });
-    clone.querySelectorAll('#wpx-edit-style').forEach(function (n) { n.remove(); });
+    clone.querySelectorAll('#wpx-edit-style,[data-wds-project-fonts="live"]').forEach(function (n) { n.remove(); });
     clone.querySelectorAll('[contenteditable]').forEach(function (n) {
       n.removeAttribute('contenteditable');
       n.removeAttribute('spellcheck');
